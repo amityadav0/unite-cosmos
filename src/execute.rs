@@ -1,8 +1,9 @@
 use cosmwasm_std::{
     DepsMut, Env, MessageInfo, Response, StdResult, CosmosMsg, BankMsg, WasmMsg, Uint128, Addr,
-    to_binary, coins,
+    to_json_binary, coins,
 };
 use cw20::Cw20ExecuteMsg;
+use sha2::{Sha256, Digest};
 
 use crate::error::ContractError;
 use crate::msg::{InstantiateMsg, ExecuteMsg};
@@ -59,11 +60,22 @@ pub fn execute_create_escrow(
     let taker_addr = deps.api.addr_validate(&taker)?;
     let token_addr = deps.api.addr_validate(&token)?;
 
+    // Validate that the correct amount of funds was sent
+    let total_required = amount + safety_deposit;
+    let sent_amount = info.funds.iter()
+        .find(|coin| coin.denom == "uatom")
+        .map(|coin| coin.amount)
+        .unwrap_or_default();
+    
+    if sent_amount != total_required {
+        return Err(ContractError::InsufficientBalance {});
+    }
+
     // Create immutables with current timestamp
     let mut immutables = Immutables {
         order_hash,
         hashlock,
-        maker: maker_addr,
+        maker: maker_addr.clone(),
         taker: taker_addr,
         token: token_addr,
         amount,
@@ -77,7 +89,7 @@ pub fn execute_create_escrow(
     let escrow_hash = immutables.hash();
     
     // Check if escrow already exists
-    if ESCROW_BY_HASH.has(deps.storage, &escrow_hash) {
+    if ESCROW_BY_HASH.has(deps.storage, escrow_hash.clone()) {
         return Err(ContractError::EscrowAlreadyExists {});
     }
 
@@ -87,7 +99,7 @@ pub fn execute_create_escrow(
 
     // Create destination complement
     let dst_complement = DstImmutablesComplement {
-        maker: maker_addr,
+        maker: maker_addr.clone(),
         amount: dst_amount,
         token: deps.api.addr_validate(&dst_token)?,
         safety_deposit,
@@ -110,7 +122,7 @@ pub fn execute_create_escrow(
 
     // Save escrow
     ESCROWS.save(deps.storage, escrow_id, &escrow_state)?;
-    ESCROW_BY_HASH.save(deps.storage, &escrow_hash, &escrow_id)?;
+    ESCROW_BY_HASH.save(deps.storage, escrow_hash.clone(), &escrow_id)?;
 
     Ok(Response::new()
         .add_attribute("method", "create_escrow")
@@ -173,7 +185,7 @@ pub fn execute_withdraw(
             // CW20 token
             messages.push(CosmosMsg::Wasm(WasmMsg::Execute {
                 contract_addr: immutables.token.to_string(),
-                msg: to_binary(&Cw20ExecuteMsg::Transfer {
+                msg: to_json_binary(&Cw20ExecuteMsg::Transfer {
                     recipient: immutables.taker.to_string(),
                     amount: escrow_state.balance,
                 })?,
@@ -251,7 +263,7 @@ pub fn execute_cancel(
         } else {
             messages.push(CosmosMsg::Wasm(WasmMsg::Execute {
                 contract_addr: immutables.token.to_string(),
-                msg: to_binary(&Cw20ExecuteMsg::Transfer {
+                msg: to_json_binary(&Cw20ExecuteMsg::Transfer {
                     recipient: recipient.to_string(),
                     amount: escrow_state.balance,
                 })?,
@@ -317,8 +329,8 @@ pub fn execute_rescue(
     } else {
         // CW20 token
         messages.push(CosmosMsg::Wasm(WasmMsg::Execute {
-            contract_addr: token,
-            msg: to_binary(&Cw20ExecuteMsg::Transfer {
+            contract_addr: token.clone(),
+            msg: to_json_binary(&Cw20ExecuteMsg::Transfer {
                 recipient: info.sender.to_string(),
                 amount,
             })?,

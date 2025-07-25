@@ -61,6 +61,6 @@ pub fn query_escrows(
 }
 
 pub fn query_escrow_by_hash(deps: Deps, hash: String) -> StdResult<EscrowByHashResponse> {
-    let escrow_id = ESCROW_BY_HASH.may_load(deps.storage, &hash)?;
+    let escrow_id = ESCROW_BY_HASH.may_load(deps.storage, hash)?;
     Ok(EscrowByHashResponse { escrow_id })
 } 

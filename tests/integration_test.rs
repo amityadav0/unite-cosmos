@@ -4,14 +4,24 @@ use cw_multi_test::{App, Contract, ContractWrapper, Executor};
 use escrow_contract::msg::{ExecuteMsg, InstantiateMsg, QueryMsg, ConfigResponse, EscrowResponse};
 
 fn mock_app() -> App {
-    App::default()
+    App::new(|router, _api, storage| {
+        // Set initial balances for test accounts
+        router
+            .bank
+            .init_balance(storage, &Addr::unchecked("owner"), vec![Coin::new(10000, "uatom")])
+            .unwrap();
+        router
+            .bank
+            .init_balance(storage, &Addr::unchecked("factory"), vec![Coin::new(5000, "uatom")])
+            .unwrap();
+    })
 }
 
 fn escrow_contract() -> Box<dyn Contract<Empty>> {
     let contract = ContractWrapper::new(
-        escrow_contract::contract::execute,
-        escrow_contract::contract::instantiate,
-        escrow_contract::contract::query,
+        escrow_contract::execute,
+        escrow_contract::instantiate,
+        escrow_contract::query,
     );
     Box::new(contract)
 }
@@ -62,9 +72,9 @@ fn test_create_escrow() {
     let create_escrow_msg = ExecuteMsg::CreateEscrow {
         order_hash: "order_hash_123".to_string(),
         hashlock: "hashlock_456".to_string(),
-        maker: "maker".to_string(),
-        taker: "taker".to_string(),
-        token: "".to_string(), // Native token
+        maker: "maker_address_123".to_string(),
+        taker: "taker_address_456".to_string(),
+        token: "token_address_123".to_string(), // CW20 token
         amount: Uint128::new(1000),
         safety_deposit: Uint128::new(100),
         timelocks: escrow_contract::state::Timelocks {
@@ -78,7 +88,7 @@ fn test_create_escrow() {
             deployed_at: 0, // Will be set by contract
         },
         dst_chain_id: "cosmoshub-4".to_string(),
-        dst_token: "".to_string(),
+        dst_token: "dst_token_address_789".to_string(),
         dst_amount: Uint128::new(1000),
     };
 
@@ -90,6 +100,9 @@ fn test_create_escrow() {
         &[Coin::new(1100, "uatom")], // amount + safety_deposit
     );
 
+    if let Err(e) = &result {
+        println!("Error: {:?}", e);
+    }
     assert!(result.is_ok());
 
     let escrow: EscrowResponse = app
@@ -100,8 +113,8 @@ fn test_create_escrow() {
     assert_eq!(escrow.escrow_id, 1);
     assert_eq!(escrow.immutables.order_hash, "order_hash_123");
     assert_eq!(escrow.immutables.hashlock, "hashlock_456");
-    assert_eq!(escrow.immutables.maker, Addr::unchecked("maker"));
-    assert_eq!(escrow.immutables.taker, Addr::unchecked("taker"));
+    assert_eq!(escrow.immutables.maker, Addr::unchecked("maker_address_123"));
+    assert_eq!(escrow.immutables.taker, Addr::unchecked("taker_address_456"));
     assert_eq!(escrow.balance, Uint128::new(1000));
     assert_eq!(escrow.native_balance, Uint128::new(100));
     assert!(escrow.is_active);

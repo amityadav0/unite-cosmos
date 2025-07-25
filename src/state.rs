@@ -1,6 +1,6 @@
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{Addr, Uint128, Timestamp};
-use cw_storage_plus::{Item, Map, U64Key};
+use cw_storage_plus::{Item, Map};
 
 #[cw_serde]
 pub struct Config {
@@ -61,7 +61,7 @@ pub struct EscrowState {
 
 // Storage keys
 pub const CONFIG: Item<Config> = Item::new("config");
-pub const ESCROWS: Map<U64Key, EscrowState> = Map::new("escrows");
+pub const ESCROWS: Map<u64, EscrowState> = Map::new("escrows");
 pub const ESCROW_COUNTER: Item<u64> = Item::new("escrow_counter");
 pub const ESCROW_BY_HASH: Map<String, u64> = Map::new("escrow_by_hash");
 
