@@ -30,7 +30,6 @@ The Cosmos implementation maintains the same core concepts as the Ethereum versi
 ### Building
 
 ```bash
-cd cosmos/escrow-contract
 cargo build --release
 ```
 
