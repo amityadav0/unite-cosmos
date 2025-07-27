@@ -77,16 +77,15 @@ fn test_create_escrow() {
         token: "token_address_123".to_string(), // CW20 token
         amount: Uint128::new(1000),
         safety_deposit: Uint128::new(100),
-        timelocks: escrow_contract::state::Timelocks {
-            src_withdrawal: 3600,
-            src_public_withdrawal: 7200,
-            src_cancellation: 10800,
-            src_public_cancellation: 14400,
-            dst_withdrawal: 3600,
-            dst_public_withdrawal: 7200,
-            dst_cancellation: 10800,
-            deployed_at: 0, // Will be set by contract
-        },
+        timelocks: escrow_contract::state::PackedTimelocks::new(
+            1, // src_withdrawal (1 hour)
+            2, // src_public_withdrawal (2 hours)
+            3, // src_cancellation (3 hours)
+            4, // src_public_cancellation (4 hours)
+            1, // dst_withdrawal (1 hour)
+            2, // dst_public_withdrawal (2 hours)
+            3, // dst_cancellation (3 hours)
+        ),
         dst_chain_id: "cosmoshub-4".to_string(),
         dst_token: "dst_token_address_789".to_string(),
         dst_amount: Uint128::new(1000),

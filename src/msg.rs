@@ -1,6 +1,6 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::{Addr, Uint128};
-use crate::state::{Immutables, Timelocks, DstImmutablesComplement};
+use crate::state::{Immutables, PackedTimelocks, DstImmutablesComplement};
 
 #[cw_serde]
 pub struct InstantiateMsg {
@@ -20,7 +20,7 @@ pub enum ExecuteMsg {
         token: String,
         amount: Uint128,
         safety_deposit: Uint128,
-        timelocks: Timelocks,
+        timelocks: PackedTimelocks,
         dst_chain_id: String,
         dst_token: String,
         dst_amount: Uint128,

@@ -9,7 +9,7 @@ use crate::error::ContractError;
 use crate::msg::{InstantiateMsg, ExecuteMsg};
 use crate::state::{
     Config, CONFIG, ESCROWS, ESCROW_COUNTER, ESCROW_BY_HASH, EscrowState, EscrowInfo, 
-    Immutables, Timelocks, DstImmutablesComplement, TimelockStage
+    Immutables, PackedTimelocks, DstImmutablesComplement, TimelockStage
 };
 
 pub fn execute_instantiate(
@@ -44,7 +44,7 @@ pub fn execute_create_escrow(
     token: String,
     amount: Uint128,
     safety_deposit: Uint128,
-    timelocks: Timelocks,
+    timelocks: PackedTimelocks,
     dst_chain_id: String,
     dst_token: String,
     dst_amount: Uint128,
@@ -72,6 +72,7 @@ pub fn execute_create_escrow(
     }
 
     // Create immutables with current timestamp
+    let deployed_at = env.block.time.seconds();
     let mut immutables = Immutables {
         order_hash,
         hashlock,
@@ -80,10 +81,8 @@ pub fn execute_create_escrow(
         token: token_addr,
         amount,
         safety_deposit,
-        timelocks: Timelocks {
-            deployed_at: env.block.time.seconds(),
-            ..timelocks
-        },
+        timelocks,
+        deployed_at,
     };
 
     let escrow_hash = immutables.hash();
@@ -167,7 +166,7 @@ pub fn execute_withdraw(
         TimelockStage::DstWithdrawal
     };
 
-    if !immutables.timelocks.is_within_stage(current_time, stage) {
+    if !immutables.timelocks.is_within_stage(current_time, stage, immutables.deployed_at) {
         return Err(ContractError::InvalidTime {});
     }
 
@@ -241,7 +240,7 @@ pub fn execute_cancel(
         TimelockStage::DstCancellation
     };
 
-    if !immutables.timelocks.is_within_stage(current_time, stage) {
+    if !immutables.timelocks.is_within_stage(current_time, stage, immutables.deployed_at) {
         return Err(ContractError::InvalidTime {});
     }
 
@@ -311,7 +310,7 @@ pub fn execute_rescue(
     // Check rescue delay
     let config = CONFIG.load(deps.storage)?;
     let current_time = env.block.time.seconds();
-    let rescue_start = immutables.timelocks.rescue_start(config.rescue_delay);
+    let rescue_start = immutables.timelocks.rescue_start(config.rescue_delay, immutables.deployed_at);
     
     if current_time < rescue_start {
         return Err(ContractError::RescueDelayNotMet {});
