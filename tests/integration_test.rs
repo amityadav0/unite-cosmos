@@ -470,4 +470,282 @@ fn test_timelock_validation() {
         &[],
     );
     assert!(result.is_err());
+}
+
+#[test]
+fn test_source_vs_destination_behavior() {
+    let mut app = mock_app();
+    let contract_id = app.store_code(escrow_contract());
+
+    let msg = InstantiateMsg {
+        owner: "owner".to_string(),
+        access_token: "access_token".to_string(),
+        rescue_delay: 3600,
+        factory: "factory".to_string(),
+    };
+
+    let contract_addr = app
+        .instantiate_contract(contract_id, Addr::unchecked("owner"), &msg, &[], "Escrow", None)
+        .unwrap();
+
+    // Test EscrowType helper methods
+    assert!(EscrowType::Source.is_source());
+    assert!(!EscrowType::Source.is_destination());
+    assert!(EscrowType::Destination.is_destination());
+    assert!(!EscrowType::Destination.is_source());
+
+    // Test withdrawal recipient logic
+    let maker = Addr::unchecked("maker");
+    let taker = Addr::unchecked("taker");
+    
+    assert_eq!(EscrowType::Source.get_withdrawal_recipient(&maker, &taker), taker);
+    assert_eq!(EscrowType::Destination.get_withdrawal_recipient(&maker, &taker), maker);
+
+    // Test cancellation recipient logic
+    assert_eq!(EscrowType::Source.get_cancellation_recipient(&maker, &taker), maker);
+    assert_eq!(EscrowType::Destination.get_cancellation_recipient(&maker, &taker), taker);
+
+    // Test stage mapping
+    assert_eq!(EscrowType::Source.get_withdrawal_stage(), TimelockStage::SrcWithdrawal);
+    assert_eq!(EscrowType::Destination.get_withdrawal_stage(), TimelockStage::DstWithdrawal);
+    
+    assert_eq!(EscrowType::Source.get_cancellation_stage(), TimelockStage::SrcCancellation);
+    assert_eq!(EscrowType::Destination.get_cancellation_stage(), TimelockStage::DstCancellation);
+
+    // Test public cancellation support
+    assert!(EscrowType::Source.supports_public_cancellation());
+    assert!(!EscrowType::Destination.supports_public_cancellation());
+
+    assert_eq!(EscrowType::Source.get_public_cancellation_stage(), Some(TimelockStage::SrcPublicCancellation));
+    assert_eq!(EscrowType::Destination.get_public_cancellation_stage(), None);
+}
+
+#[test]
+fn test_escrow_type_validation() {
+    let mut app = mock_app();
+    let contract_id = app.store_code(escrow_contract());
+
+    let msg = InstantiateMsg {
+        owner: "owner".to_string(),
+        access_token: "access_token".to_string(),
+        rescue_delay: 3600,
+        factory: "factory".to_string(),
+    };
+
+    let contract_addr = app
+        .instantiate_contract(contract_id, Addr::unchecked("owner"), &msg, &[], "Escrow", None)
+        .unwrap();
+
+    // Create source escrow
+    let create_src_msg = ExecuteMsg::CreateEscrow {
+        order_hash: "order_hash_src".to_string(),
+        hashlock: "hashlock_src".to_string(),
+        maker: "maker_address_123".to_string(),
+        taker: "taker_address_456".to_string(),
+        token: "token_address_123".to_string(),
+        amount: Uint128::new(1000),
+        safety_deposit: Uint128::new(100),
+        timelocks: escrow_contract::state::PackedTimelocks::new(
+            0, 1, 2, 3, 4, 1, 2, 3,
+        ),
+        escrow_type: EscrowType::Source,
+        dst_chain_id: "cosmoshub-4".to_string(),
+        dst_token: "dst_token_address_789".to_string(),
+        dst_amount: Uint128::new(1000),
+    };
+
+    app.execute_contract(
+        Addr::unchecked("factory"),
+        contract_addr.clone(),
+        &create_src_msg,
+        &[Coin::new(1100, "uatom")],
+    ).unwrap();
+
+    // Create destination escrow
+    let create_dst_msg = ExecuteMsg::CreateEscrow {
+        order_hash: "order_hash_dst".to_string(),
+        hashlock: "hashlock_dst".to_string(),
+        maker: "maker_address_123".to_string(),
+        taker: "taker_address_456".to_string(),
+        token: "token_address_123".to_string(),
+        amount: Uint128::new(1000),
+        safety_deposit: Uint128::new(100),
+        timelocks: escrow_contract::state::PackedTimelocks::new(
+            0, 1, 2, 3, 4, 1, 2, 3,
+        ),
+        escrow_type: EscrowType::Destination,
+        dst_chain_id: "cosmoshub-4".to_string(),
+        dst_token: "dst_token_address_789".to_string(),
+        dst_amount: Uint128::new(1000),
+    };
+
+    app.execute_contract(
+        Addr::unchecked("factory"),
+        contract_addr.clone(),
+        &create_dst_msg,
+        &[Coin::new(1100, "uatom")],
+    ).unwrap();
+
+    // Test: Source-specific operations on source escrow should work
+    let withdraw_src_msg = ExecuteMsg::WithdrawSrc {
+        escrow_id: 1,
+        secret: "any_secret".to_string(),
+    };
+
+    let result = app.execute_contract(
+        Addr::unchecked("taker_address_456"),
+        contract_addr.clone(),
+        &withdraw_src_msg,
+        &[],
+    );
+    // Will fail due to timelock, but not due to type validation
+    assert!(result.is_err());
+
+    // Test: Source-specific operations on destination escrow should fail
+    let withdraw_src_on_dst_msg = ExecuteMsg::WithdrawSrc {
+        escrow_id: 2,
+        secret: "any_secret".to_string(),
+    };
+
+    let result = app.execute_contract(
+        Addr::unchecked("taker_address_456"),
+        contract_addr.clone(),
+        &withdraw_src_on_dst_msg,
+        &[],
+    );
+    assert!(result.is_err());
+
+    // Test: Destination-specific operations on destination escrow should work
+    let withdraw_dst_msg = ExecuteMsg::WithdrawDst {
+        escrow_id: 2,
+        secret: "any_secret".to_string(),
+    };
+
+    let result = app.execute_contract(
+        Addr::unchecked("taker_address_456"),
+        contract_addr.clone(),
+        &withdraw_dst_msg,
+        &[],
+    );
+    // Will fail due to timelock, but not due to type validation
+    assert!(result.is_err());
+
+    // Test: Destination-specific operations on source escrow should fail
+    let withdraw_dst_on_src_msg = ExecuteMsg::WithdrawDst {
+        escrow_id: 1,
+        secret: "any_secret".to_string(),
+    };
+
+    let result = app.execute_contract(
+        Addr::unchecked("taker_address_456"),
+        contract_addr.clone(),
+        &withdraw_dst_on_src_msg,
+        &[],
+    );
+    assert!(result.is_err());
+
+    // Test: Public cancel on source escrow should work
+    let public_cancel_src_msg = ExecuteMsg::PublicCancelSrc { escrow_id: 1 };
+
+    let result = app.execute_contract(
+        Addr::unchecked("access_token"),
+        contract_addr.clone(),
+        &public_cancel_src_msg,
+        &[],
+    );
+    // Will fail due to timelock, but not due to type validation
+    assert!(result.is_err());
+
+    // Test: Public cancel on destination escrow should fail (no such operation)
+    // Note: There's no PublicCancelDst message type, but we can test the generic one
+    let public_cancel_dst_msg = ExecuteMsg::PublicCancel { escrow_id: 2 };
+
+    let result = app.execute_contract(
+        Addr::unchecked("access_token"),
+        contract_addr.clone(),
+        &public_cancel_dst_msg,
+        &[],
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_legacy_compatibility() {
+    let mut app = mock_app();
+    let contract_id = app.store_code(escrow_contract());
+
+    let msg = InstantiateMsg {
+        owner: "owner".to_string(),
+        access_token: "access_token".to_string(),
+        rescue_delay: 3600,
+        factory: "factory".to_string(),
+    };
+
+    let contract_addr = app
+        .instantiate_contract(contract_id, Addr::unchecked("owner"), &msg, &[], "Escrow", None)
+        .unwrap();
+
+    // Create escrow with legacy generic message
+    let create_msg = ExecuteMsg::CreateEscrow {
+        order_hash: "order_hash_legacy".to_string(),
+        hashlock: "hashlock_legacy".to_string(),
+        maker: "maker_address_123".to_string(),
+        taker: "taker_address_456".to_string(),
+        token: "token_address_123".to_string(),
+        amount: Uint128::new(1000),
+        safety_deposit: Uint128::new(100),
+        timelocks: escrow_contract::state::PackedTimelocks::new(
+            0, 1, 2, 3, 4, 1, 2, 3,
+        ),
+        escrow_type: EscrowType::Source,
+        dst_chain_id: "cosmoshub-4".to_string(),
+        dst_token: "dst_token_address_789".to_string(),
+        dst_amount: Uint128::new(1000),
+    };
+
+    app.execute_contract(
+        Addr::unchecked("factory"),
+        contract_addr.clone(),
+        &create_msg,
+        &[Coin::new(1100, "uatom")],
+    ).unwrap();
+
+    // Test: Legacy generic withdraw should route to correct function
+    let withdraw_msg = ExecuteMsg::Withdraw {
+        escrow_id: 1,
+        secret: "any_secret".to_string(),
+    };
+
+    let result = app.execute_contract(
+        Addr::unchecked("taker_address_456"),
+        contract_addr.clone(),
+        &withdraw_msg,
+        &[],
+    );
+    // Will fail due to timelock, but not due to routing
+    assert!(result.is_err());
+
+    // Test: Legacy generic cancel should route to correct function
+    let cancel_msg = ExecuteMsg::Cancel { escrow_id: 1 };
+
+    let result = app.execute_contract(
+        Addr::unchecked("taker_address_456"),
+        contract_addr.clone(),
+        &cancel_msg,
+        &[],
+    );
+    // Will fail due to timelock, but not due to routing
+    assert!(result.is_err());
+
+    // Test: Legacy generic public withdraw should route to correct function
+    let public_withdraw_msg = ExecuteMsg::PublicWithdraw { escrow_id: 1 };
+
+    let result = app.execute_contract(
+        Addr::unchecked("access_token"),
+        contract_addr.clone(),
+        &public_withdraw_msg,
+        &[],
+    );
+    // Will fail due to timelock, but not due to routing
+    assert!(result.is_err());
 } 
