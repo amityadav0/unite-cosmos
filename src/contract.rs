@@ -1,5 +1,5 @@
 use cosmwasm_std::{Deps, StdResult};
-use crate::state::{CONFIG, ESCROWS, EscrowState};
+use crate::state::{CONFIG, ESCROWS};
 
 /// Get the total number of active escrows
 pub fn get_active_escrow_count(deps: Deps) -> StdResult<u64> {

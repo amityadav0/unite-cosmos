@@ -1,6 +1,6 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
-use cosmwasm_std::{Addr, Uint128};
-use crate::state::{Immutables, PackedTimelocks, DstImmutablesComplement, EscrowType};
+use cosmwasm_std::Uint128;
+use crate::state::{EscrowCreationParams};
 
 #[cw_serde]
 pub struct InstantiateMsg {
@@ -12,7 +12,12 @@ pub struct InstantiateMsg {
 
 #[cw_serde]
 pub enum ExecuteMsg {
+    // Factory-specific operations
     CreateEscrow {
+        params: EscrowCreationParams,
+        salt: String, // For deterministic address generation
+    },
+    HandlePostInteraction {
         order_hash: String,
         hashlock: String,
         maker: String,
@@ -20,11 +25,14 @@ pub enum ExecuteMsg {
         token: String,
         amount: Uint128,
         safety_deposit: Uint128,
-        timelocks: PackedTimelocks,
-        escrow_type: EscrowType, // Source or Destination
+        timelocks: crate::state::PackedTimelocks,
         dst_chain_id: String,
         dst_token: String,
         dst_amount: Uint128,
+    },
+    CancelCreationRequest {
+        order_hash: String,
+        hashlock: String,
     },
     // Source-specific operations
     WithdrawSrc {
@@ -51,20 +59,6 @@ pub enum ExecuteMsg {
     PublicWithdrawDst {
         escrow_id: u64,
     },
-    // Generic operations (for backward compatibility)
-    Withdraw {
-        escrow_id: u64,
-        secret: String,
-    },
-    Cancel {
-        escrow_id: u64,
-    },
-    PublicWithdraw {
-        escrow_id: u64,
-    },
-    PublicCancel {
-        escrow_id: u64,
-    },
     Rescue {
         escrow_id: u64,
     },
@@ -75,12 +69,30 @@ pub enum ExecuteMsg {
 pub enum QueryMsg {
     #[returns(ConfigResponse)]
     Config {},
+    #[returns(FactoryConfigResponse)]
+    FactoryConfig {},
     #[returns(EscrowResponse)]
     Escrow { escrow_id: u64 },
     #[returns(EscrowsResponse)]
     Escrows { start_after: Option<u64>, limit: Option<u32> },
     #[returns(EscrowByHashResponse)]
     EscrowByHash { hash: String },
+    #[returns(EscrowAddressResponse)]
+    AddressOfEscrow { 
+        order_hash: String, 
+        hashlock: String, 
+        salt: String 
+    },
+    #[returns(CreationRequestResponse)]
+    CreationRequest { 
+        order_hash: String, 
+        hashlock: String 
+    },
+    #[returns(CreationRequestsResponse)]
+    CreationRequests { 
+        start_after: Option<String>, 
+        limit: Option<u32> 
+    },
 }
 
 #[cw_serde]
@@ -92,11 +104,22 @@ pub struct ConfigResponse {
 }
 
 #[cw_serde]
+pub struct FactoryConfigResponse {
+    pub owner: String,
+    pub escrow_contract: String,
+    pub access_token: String,
+    pub rescue_delay: u64,
+    pub min_safety_deposit: Uint128,
+    pub max_safety_deposit: Uint128,
+    pub creation_fee: Uint128,
+}
+
+#[cw_serde]
 pub struct EscrowResponse {
     pub escrow_id: u64,
-    pub immutables: Immutables,
-    pub dst_complement: Option<DstImmutablesComplement>,
-    pub escrow_type: EscrowType,
+    pub immutables: crate::state::Immutables,
+    pub dst_complement: Option<crate::state::DstImmutablesComplement>,
+    pub escrow_type: crate::state::EscrowType,
     pub is_active: bool,
     pub balance: Uint128,
     pub native_balance: Uint128,
@@ -111,4 +134,19 @@ pub struct EscrowsResponse {
 #[cw_serde]
 pub struct EscrowByHashResponse {
     pub escrow_id: Option<u64>,
+}
+
+#[cw_serde]
+pub struct EscrowAddressResponse {
+    pub address: String,
+}
+
+#[cw_serde]
+pub struct CreationRequestResponse {
+    pub request: Option<crate::state::EscrowCreationRequest>,
+}
+
+#[cw_serde]
+pub struct CreationRequestsResponse {
+    pub requests: Vec<crate::state::EscrowCreationRequest>,
 } 

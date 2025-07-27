@@ -1,7 +1,7 @@
 use cosmwasm_std::{Addr, Coin, Uint128};
 use cw_multi_test::{App, Contract, ContractWrapper, Executor};
 use escrow_contract::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
-use escrow_contract::state::{TimelockStage, PackedTimelocks, EscrowType};
+use escrow_contract::state::{TimelockStage, PackedTimelocks, EscrowType, EscrowCreationParams};
 use sha2::{Sha256, Digest};
 
 fn escrow_contract() -> Box<dyn Contract<cosmwasm_std::Empty>> {
@@ -47,76 +47,6 @@ fn test_instantiate() {
     assert_eq!(config.access_token, "access_token");
     assert_eq!(config.rescue_delay, 3600);
     assert_eq!(config.factory, "factory");
-}
-
-#[test]
-fn test_create_escrow() {
-    let mut app = mock_app();
-    let contract_id = app.store_code(escrow_contract());
-
-    let msg = InstantiateMsg {
-        owner: "owner".to_string(),
-        access_token: "access_token".to_string(),
-        rescue_delay: 3600,
-        factory: "factory".to_string(),
-    };
-
-    let contract_addr = app
-        .instantiate_contract(contract_id, Addr::unchecked("owner"), &msg, &[], "Escrow", None)
-        .unwrap();
-
-    let create_msg = ExecuteMsg::CreateEscrow {
-        order_hash: "order_hash_123".to_string(),
-        hashlock: "hashlock_456".to_string(),
-        maker: "maker_address_123".to_string(),
-        taker: "taker_address_456".to_string(),
-        token: "token_address_123".to_string(),
-        amount: Uint128::new(1000),
-        safety_deposit: Uint128::new(100),
-        timelocks: escrow_contract::state::PackedTimelocks::new(
-            0, // deployed_at (will be set by contract)
-            1, // src_withdrawal (1 hour)
-            2, // src_public_withdrawal (2 hours)
-            3, // src_cancellation (3 hours)
-            4, // src_public_cancellation (4 hours)
-            1, // dst_withdrawal (1 hour)
-            2, // dst_public_withdrawal (2 hours)
-            3, // dst_cancellation (3 hours)
-        ),
-        escrow_type: EscrowType::Source,
-        dst_chain_id: "cosmoshub-4".to_string(),
-        dst_token: "dst_token_address_789".to_string(),
-        dst_amount: Uint128::new(1000),
-    };
-
-    let result = app.execute_contract(
-        Addr::unchecked("factory"),
-        contract_addr.clone(),
-        &create_msg,
-        &[Coin::new(1100, "uatom")], // amount + safety_deposit
-    );
-
-    if let Err(e) = &result {
-        println!("Error: {:?}", e);
-    }
-    assert!(result.is_ok());
-
-    // Query escrow to verify creation
-    let escrow: escrow_contract::msg::EscrowResponse = app
-        .wrap()
-        .query_wasm_smart(contract_addr, &QueryMsg::Escrow { escrow_id: 1 })
-        .unwrap();
-
-    assert_eq!(escrow.escrow_id, 1);
-    assert_eq!(escrow.immutables.order_hash, "order_hash_123");
-    assert_eq!(escrow.immutables.hashlock, "hashlock_456");
-    assert_eq!(escrow.immutables.maker, "maker_address_123");
-    assert_eq!(escrow.immutables.taker, "taker_address_456");
-    assert_eq!(escrow.immutables.token, "token_address_123");
-    assert_eq!(escrow.balance, Uint128::new(1000));
-    assert_eq!(escrow.native_balance, Uint128::new(100));
-    assert!(escrow.is_active);
-    assert!(escrow.escrow_type == EscrowType::Source);
 }
 
 #[test]
@@ -244,12 +174,12 @@ fn test_access_control() {
         .unwrap();
 
     // Test: Only factory can create escrows
-    let create_msg = ExecuteMsg::CreateEscrow {
+    let params = EscrowCreationParams {
         order_hash: "order_hash_123".to_string(),
         hashlock: "hashlock_456".to_string(),
-        maker: "maker_address_123".to_string(),
-        taker: "taker_address_456".to_string(),
-        token: "token_address_123".to_string(),
+        maker: Addr::unchecked("maker_address_123"),
+        taker: Addr::unchecked("taker_address_456"),
+        token: Addr::unchecked("token_address_123"),
         amount: Uint128::new(1000),
         safety_deposit: Uint128::new(100),
         timelocks: escrow_contract::state::PackedTimelocks::new(
@@ -257,8 +187,13 @@ fn test_access_control() {
         ),
         escrow_type: EscrowType::Source,
         dst_chain_id: "cosmoshub-4".to_string(),
-        dst_token: "dst_token_address_789".to_string(),
+        dst_token: Addr::unchecked("dst_token_address_789"),
         dst_amount: Uint128::new(1000),
+    };
+
+    let create_msg = ExecuteMsg::CreateEscrow {
+        params,
+        salt: "test_salt".to_string(),
     };
 
     // Should fail: non-factory trying to create escrow
@@ -266,16 +201,16 @@ fn test_access_control() {
         Addr::unchecked("unauthorized"),
         contract_addr.clone(),
         &create_msg,
-        &[Coin::new(1100, "uatom")],
+        &[Coin::new(10, "uatom")], // Creation fee
     );
     assert!(result.is_err());
 
     // Should succeed: factory creating escrow
     let result = app.execute_contract(
-        Addr::unchecked("factory"),
+        Addr::unchecked("owner"), // Factory owner can create escrows
         contract_addr.clone(),
         &create_msg,
-        &[Coin::new(1100, "uatom")],
+        &[Coin::new(10, "uatom")], // Creation fee
     );
     assert!(result.is_ok());
 
@@ -340,12 +275,12 @@ fn test_secret_validation() {
     let secret_hash = Sha256::digest(secret.as_bytes());
     let hashlock = format!("{:x}", secret_hash);
 
-    let create_msg = ExecuteMsg::CreateEscrow {
+    let params = EscrowCreationParams {
         order_hash: "order_hash_123".to_string(),
         hashlock: hashlock.clone(),
-        maker: "maker_address_123".to_string(),
-        taker: "taker_address_456".to_string(),
-        token: "token_address_123".to_string(),
+        maker: Addr::unchecked("maker_address_123"),
+        taker: Addr::unchecked("taker_address_456"),
+        token: Addr::unchecked("token_address_123"),
         amount: Uint128::new(1000),
         safety_deposit: Uint128::new(100),
         timelocks: escrow_contract::state::PackedTimelocks::new(
@@ -353,15 +288,20 @@ fn test_secret_validation() {
         ),
         escrow_type: EscrowType::Source,
         dst_chain_id: "cosmoshub-4".to_string(),
-        dst_token: "dst_token_address_789".to_string(),
+        dst_token: Addr::unchecked("dst_token_address_789"),
         dst_amount: Uint128::new(1000),
     };
 
+    let create_msg = ExecuteMsg::CreateEscrow {
+        params,
+        salt: "test_salt".to_string(),
+    };
+
     app.execute_contract(
-        Addr::unchecked("factory"),
+        Addr::unchecked("owner"),
         contract_addr.clone(),
         &create_msg,
-        &[Coin::new(1100, "uatom")],
+        &[Coin::new(10, "uatom")],
     ).unwrap();
 
     // Test: Correct secret should work
@@ -411,12 +351,12 @@ fn test_timelock_validation() {
         .unwrap();
 
     // Create escrow with short timelocks
-    let create_msg = ExecuteMsg::CreateEscrow {
+    let params = EscrowCreationParams {
         order_hash: "order_hash_123".to_string(),
         hashlock: "hashlock_456".to_string(),
-        maker: "maker_address_123".to_string(),
-        taker: "taker_address_456".to_string(),
-        token: "token_address_123".to_string(),
+        maker: Addr::unchecked("maker_address_123"),
+        taker: Addr::unchecked("taker_address_456"),
+        token: Addr::unchecked("token_address_123"),
         amount: Uint128::new(1000),
         safety_deposit: Uint128::new(100),
         timelocks: escrow_contract::state::PackedTimelocks::new(
@@ -424,15 +364,20 @@ fn test_timelock_validation() {
         ),
         escrow_type: EscrowType::Source,
         dst_chain_id: "cosmoshub-4".to_string(),
-        dst_token: "dst_token_address_789".to_string(),
+        dst_token: Addr::unchecked("dst_token_address_789"),
         dst_amount: Uint128::new(1000),
     };
 
+    let create_msg = ExecuteMsg::CreateEscrow {
+        params,
+        salt: "test_salt".to_string(),
+    };
+
     app.execute_contract(
-        Addr::unchecked("factory"),
+        Addr::unchecked("owner"),
         contract_addr.clone(),
         &create_msg,
-        &[Coin::new(1100, "uatom")],
+        &[Coin::new(10, "uatom")],
     ).unwrap();
 
     // Test: Withdraw before timelock should fail
@@ -537,12 +482,12 @@ fn test_escrow_type_validation() {
         .unwrap();
 
     // Create source escrow
-    let create_src_msg = ExecuteMsg::CreateEscrow {
+    let src_params = EscrowCreationParams {
         order_hash: "order_hash_src".to_string(),
         hashlock: "hashlock_src".to_string(),
-        maker: "maker_address_123".to_string(),
-        taker: "taker_address_456".to_string(),
-        token: "token_address_123".to_string(),
+        maker: Addr::unchecked("maker_address_123"),
+        taker: Addr::unchecked("taker_address_456"),
+        token: Addr::unchecked("token_address_123"),
         amount: Uint128::new(1000),
         safety_deposit: Uint128::new(100),
         timelocks: escrow_contract::state::PackedTimelocks::new(
@@ -550,24 +495,29 @@ fn test_escrow_type_validation() {
         ),
         escrow_type: EscrowType::Source,
         dst_chain_id: "cosmoshub-4".to_string(),
-        dst_token: "dst_token_address_789".to_string(),
+        dst_token: Addr::unchecked("dst_token_address_789"),
         dst_amount: Uint128::new(1000),
     };
 
+    let create_src_msg = ExecuteMsg::CreateEscrow {
+        params: src_params,
+        salt: "src_salt".to_string(),
+    };
+
     app.execute_contract(
-        Addr::unchecked("factory"),
+        Addr::unchecked("owner"),
         contract_addr.clone(),
         &create_src_msg,
-        &[Coin::new(1100, "uatom")],
+        &[Coin::new(10, "uatom")],
     ).unwrap();
 
     // Create destination escrow
-    let create_dst_msg = ExecuteMsg::CreateEscrow {
+    let dst_params = EscrowCreationParams {
         order_hash: "order_hash_dst".to_string(),
         hashlock: "hashlock_dst".to_string(),
-        maker: "maker_address_123".to_string(),
-        taker: "taker_address_456".to_string(),
-        token: "token_address_123".to_string(),
+        maker: Addr::unchecked("maker_address_123"),
+        taker: Addr::unchecked("taker_address_456"),
+        token: Addr::unchecked("token_address_123"),
         amount: Uint128::new(1000),
         safety_deposit: Uint128::new(100),
         timelocks: escrow_contract::state::PackedTimelocks::new(
@@ -575,15 +525,20 @@ fn test_escrow_type_validation() {
         ),
         escrow_type: EscrowType::Destination,
         dst_chain_id: "cosmoshub-4".to_string(),
-        dst_token: "dst_token_address_789".to_string(),
+        dst_token: Addr::unchecked("dst_token_address_789"),
         dst_amount: Uint128::new(1000),
     };
 
+    let create_dst_msg = ExecuteMsg::CreateEscrow {
+        params: dst_params,
+        salt: "dst_salt".to_string(),
+    };
+
     app.execute_contract(
-        Addr::unchecked("factory"),
+        Addr::unchecked("owner"),
         contract_addr.clone(),
         &create_dst_msg,
-        &[Coin::new(1100, "uatom")],
+        &[Coin::new(10, "uatom")],
     ).unwrap();
 
     // Test: Source-specific operations on source escrow should work
@@ -655,22 +610,10 @@ fn test_escrow_type_validation() {
     );
     // Will fail due to timelock, but not due to type validation
     assert!(result.is_err());
-
-    // Test: Public cancel on destination escrow should fail (no such operation)
-    // Note: There's no PublicCancelDst message type, but we can test the generic one
-    let public_cancel_dst_msg = ExecuteMsg::PublicCancel { escrow_id: 2 };
-
-    let result = app.execute_contract(
-        Addr::unchecked("access_token"),
-        contract_addr.clone(),
-        &public_cancel_dst_msg,
-        &[],
-    );
-    assert!(result.is_err());
 }
 
 #[test]
-fn test_legacy_compatibility() {
+fn test_factory_pattern() {
     let mut app = mock_app();
     let contract_id = app.store_code(escrow_contract());
 
@@ -685,10 +628,107 @@ fn test_legacy_compatibility() {
         .instantiate_contract(contract_id, Addr::unchecked("owner"), &msg, &[], "Escrow", None)
         .unwrap();
 
-    // Create escrow with legacy generic message
+    // Test factory configuration query
+    let factory_config: escrow_contract::msg::FactoryConfigResponse = app
+        .wrap()
+        .query_wasm_smart(contract_addr.clone(), &QueryMsg::FactoryConfig {})
+        .unwrap();
+
+    assert_eq!(factory_config.owner, "owner");
+    assert_eq!(factory_config.escrow_contract, "factory");
+    assert_eq!(factory_config.access_token, "access_token");
+    assert_eq!(factory_config.rescue_delay, 3600);
+
+    // Test deterministic address computation
+    let address_response: escrow_contract::msg::EscrowAddressResponse = app
+        .wrap()
+        .query_wasm_smart(
+            contract_addr.clone(),
+            &QueryMsg::AddressOfEscrow {
+                order_hash: "order_hash_123".to_string(),
+                hashlock: "hashlock_456".to_string(),
+                salt: "salt_789".to_string(),
+            }
+        )
+        .unwrap();
+
+    // Address should be deterministic
+    assert!(!address_response.address.is_empty());
+
+    // Test factory escrow creation
+    let params = EscrowCreationParams {
+        order_hash: "order_hash_factory".to_string(),
+        hashlock: "hashlock_factory".to_string(),
+        maker: Addr::unchecked("maker_address_123"),
+        taker: Addr::unchecked("taker_address_456"),
+        token: Addr::unchecked("token_address_123"),
+        amount: Uint128::new(1000),
+        safety_deposit: Uint128::new(100),
+        timelocks: escrow_contract::state::PackedTimelocks::new(
+            0, 1, 2, 3, 4, 1, 2, 3,
+        ),
+        escrow_type: EscrowType::Source,
+        dst_chain_id: "cosmoshub-4".to_string(),
+        dst_token: Addr::unchecked("dst_token_address_789"),
+        dst_amount: Uint128::new(1000),
+    };
+
     let create_msg = ExecuteMsg::CreateEscrow {
-        order_hash: "order_hash_legacy".to_string(),
-        hashlock: "hashlock_legacy".to_string(),
+        params,
+        salt: "factory_salt".to_string(),
+    };
+
+    let result = app.execute_contract(
+        Addr::unchecked("owner"), // Factory owner can create escrows
+        contract_addr.clone(),
+        &create_msg,
+        &[Coin::new(10, "uatom")], // Creation fee
+    );
+
+    if let Err(e) = &result {
+        println!("Error: {:?}", e);
+    }
+    assert!(result.is_ok());
+
+    // Test creation request query
+    let creation_request: escrow_contract::msg::CreationRequestResponse = app
+        .wrap()
+        .query_wasm_smart(
+            contract_addr.clone(),
+            &QueryMsg::CreationRequest {
+                order_hash: "order_hash_factory".to_string(),
+                hashlock: "hashlock_factory".to_string(),
+            }
+        )
+        .unwrap();
+
+    assert!(creation_request.request.is_some());
+    let request = creation_request.request.unwrap();
+    assert_eq!(request.params.order_hash, "order_hash_factory");
+    assert_eq!(request.params.hashlock, "hashlock_factory");
+    assert_eq!(request.status, escrow_contract::state::CreationStatus::Created);
+}
+
+#[test]
+fn test_post_interaction_handling() {
+    let mut app = mock_app();
+    let contract_id = app.store_code(escrow_contract());
+
+    let msg = InstantiateMsg {
+        owner: "owner".to_string(),
+        access_token: "access_token".to_string(),
+        rescue_delay: 3600,
+        factory: "factory".to_string(),
+    };
+
+    let contract_addr = app
+        .instantiate_contract(contract_id, Addr::unchecked("owner"), &msg, &[], "Escrow", None)
+        .unwrap();
+
+    // Test post-interaction escrow creation
+    let post_interaction_msg = ExecuteMsg::HandlePostInteraction {
+        order_hash: "order_hash_post".to_string(),
+        hashlock: "hashlock_post".to_string(),
         maker: "maker_address_123".to_string(),
         taker: "taker_address_456".to_string(),
         token: "token_address_123".to_string(),
@@ -697,55 +737,153 @@ fn test_legacy_compatibility() {
         timelocks: escrow_contract::state::PackedTimelocks::new(
             0, 1, 2, 3, 4, 1, 2, 3,
         ),
-        escrow_type: EscrowType::Source,
         dst_chain_id: "cosmoshub-4".to_string(),
         dst_token: "dst_token_address_789".to_string(),
         dst_amount: Uint128::new(1000),
     };
 
-    app.execute_contract(
-        Addr::unchecked("factory"),
+    let result = app.execute_contract(
+        Addr::unchecked("owner"), // Factory owner can handle post-interaction
         contract_addr.clone(),
-        &create_msg,
-        &[Coin::new(1100, "uatom")],
-    ).unwrap();
+        &post_interaction_msg,
+        &[Coin::new(1100, "uatom")], // amount + safety_deposit
+    );
 
-    // Test: Legacy generic withdraw should route to correct function
-    let withdraw_msg = ExecuteMsg::Withdraw {
-        escrow_id: 1,
-        secret: "any_secret".to_string(),
+    if let Err(e) = &result {
+        println!("Error: {:?}", e);
+    }
+    assert!(result.is_ok());
+
+    // Verify escrow was created
+    let escrow: escrow_contract::msg::EscrowResponse = app
+        .wrap()
+        .query_wasm_smart(contract_addr.clone(), &QueryMsg::Escrow { escrow_id: 1 })
+        .unwrap();
+
+    assert_eq!(escrow.escrow_id, 1);
+    assert_eq!(escrow.immutables.order_hash, "order_hash_post");
+    assert_eq!(escrow.immutables.hashlock, "hashlock_post");
+    assert_eq!(escrow.escrow_type, EscrowType::Source); // Always source for post-interaction
+    assert!(escrow.is_active);
+
+    // Test creation request for post-interaction
+    let creation_request: escrow_contract::msg::CreationRequestResponse = app
+        .wrap()
+        .query_wasm_smart(
+            contract_addr.clone(),
+            &QueryMsg::CreationRequest {
+                order_hash: "order_hash_post".to_string(),
+                hashlock: "hashlock_post".to_string(),
+            }
+        )
+        .unwrap();
+
+    assert!(creation_request.request.is_some());
+    let request = creation_request.request.unwrap();
+    assert_eq!(request.status, escrow_contract::state::CreationStatus::Created);
+}
+
+#[test]
+fn test_creation_request_cancellation() {
+    let mut app = mock_app();
+    let contract_id = app.store_code(escrow_contract());
+
+    let msg = InstantiateMsg {
+        owner: "owner".to_string(),
+        access_token: "access_token".to_string(),
+        rescue_delay: 3600,
+        factory: "factory".to_string(),
+    };
+
+    let contract_addr = app
+        .instantiate_contract(contract_id, Addr::unchecked("owner"), &msg, &[], "Escrow", None)
+        .unwrap();
+
+    // Test cancellation by non-owner should fail (even for non-existent request)
+    let cancel_msg = ExecuteMsg::CancelCreationRequest {
+        order_hash: "non_existent_order".to_string(),
+        hashlock: "non_existent_hashlock".to_string(),
     };
 
     let result = app.execute_contract(
-        Addr::unchecked("taker_address_456"),
-        contract_addr.clone(),
-        &withdraw_msg,
-        &[],
-    );
-    // Will fail due to timelock, but not due to routing
-    assert!(result.is_err());
-
-    // Test: Legacy generic cancel should route to correct function
-    let cancel_msg = ExecuteMsg::Cancel { escrow_id: 1 };
-
-    let result = app.execute_contract(
-        Addr::unchecked("taker_address_456"),
+        Addr::unchecked("unauthorized"),
         contract_addr.clone(),
         &cancel_msg,
         &[],
     );
-    // Will fail due to timelock, but not due to routing
     assert!(result.is_err());
 
-    // Test: Legacy generic public withdraw should route to correct function
-    let public_withdraw_msg = ExecuteMsg::PublicWithdraw { escrow_id: 1 };
+    // Test cancellation by owner for non-existent request should fail
+    let cancel_msg = ExecuteMsg::CancelCreationRequest {
+        order_hash: "non_existent_order".to_string(),
+        hashlock: "non_existent_hashlock".to_string(),
+    };
 
     let result = app.execute_contract(
-        Addr::unchecked("access_token"),
+        Addr::unchecked("owner"),
         contract_addr.clone(),
-        &public_withdraw_msg,
+        &cancel_msg,
         &[],
     );
-    // Will fail due to timelock, but not due to routing
     assert!(result.is_err());
+
+    // Create an escrow (which will be immediately processed and set to Created status)
+    let params = EscrowCreationParams {
+        order_hash: "order_hash_cancel".to_string(),
+        hashlock: "hashlock_cancel".to_string(),
+        maker: Addr::unchecked("maker_address_123"),
+        taker: Addr::unchecked("taker_address_456"),
+        token: Addr::unchecked("token_address_123"),
+        amount: Uint128::new(1000),
+        safety_deposit: Uint128::new(100),
+        timelocks: escrow_contract::state::PackedTimelocks::new(
+            0, 1, 2, 3, 4, 1, 2, 3,
+        ),
+        escrow_type: EscrowType::Source,
+        dst_chain_id: "cosmoshub-4".to_string(),
+        dst_token: Addr::unchecked("dst_token_address_789"),
+        dst_amount: Uint128::new(1000),
+    };
+
+    let create_msg = ExecuteMsg::CreateEscrow {
+        params,
+        salt: "cancel_salt".to_string(),
+    };
+
+    app.execute_contract(
+        Addr::unchecked("owner"),
+        contract_addr.clone(),
+        &create_msg,
+        &[Coin::new(10, "uatom")],
+    ).unwrap();
+
+    // Test cancellation by owner for already created request should fail
+    let cancel_msg = ExecuteMsg::CancelCreationRequest {
+        order_hash: "order_hash_cancel".to_string(),
+        hashlock: "hashlock_cancel".to_string(),
+    };
+
+    let result = app.execute_contract(
+        Addr::unchecked("owner"),
+        contract_addr.clone(),
+        &cancel_msg,
+        &[],
+    );
+    assert!(result.is_err());
+
+    // Verify request was created (not cancelled)
+    let creation_request: escrow_contract::msg::CreationRequestResponse = app
+        .wrap()
+        .query_wasm_smart(
+            contract_addr.clone(),
+            &QueryMsg::CreationRequest {
+                order_hash: "order_hash_cancel".to_string(),
+                hashlock: "hashlock_cancel".to_string(),
+            }
+        )
+        .unwrap();
+
+    assert!(creation_request.request.is_some());
+    let request = creation_request.request.unwrap();
+    assert_eq!(request.status, escrow_contract::state::CreationStatus::Created);
 } 
