@@ -11,17 +11,94 @@ pub struct Config {
     pub factory: Addr,
 }
 
-/// Bit-packed timelocks structure (similar to Solidity's Timelocks type)
-/// Each timelock value is stored as 8 bits (0-255), allowing 7 values in a single u64
+/// Timelock stages matching Solidity enum
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimelockStage {
+    SrcWithdrawal,           // 0: Source private withdrawal
+    SrcPublicWithdrawal,     // 1: Source public withdrawal
+    SrcCancellation,         // 2: Source private cancellation
+    SrcPublicCancellation,   // 3: Source public cancellation
+    DstWithdrawal,           // 4: Destination private withdrawal
+    DstPublicWithdrawal,     // 5: Destination public withdrawal
+    DstCancellation,         // 6: Destination private cancellation
+}
+
+impl TimelockStage {
+    /// Convert stage to bit offset for packing
+    pub fn bit_offset(&self) -> u64 {
+        match self {
+            TimelockStage::SrcWithdrawal => 0,
+            TimelockStage::SrcPublicWithdrawal => 1,
+            TimelockStage::SrcCancellation => 2,
+            TimelockStage::SrcPublicCancellation => 3,
+            TimelockStage::DstWithdrawal => 4,
+            TimelockStage::DstPublicWithdrawal => 5,
+            TimelockStage::DstCancellation => 6,
+        }
+    }
+
+    /// Check if stage is for source chain
+    pub fn is_source(&self) -> bool {
+        matches!(self, 
+            TimelockStage::SrcWithdrawal | 
+            TimelockStage::SrcPublicWithdrawal | 
+            TimelockStage::SrcCancellation | 
+            TimelockStage::SrcPublicCancellation
+        )
+    }
+
+    /// Check if stage is for destination chain
+    pub fn is_destination(&self) -> bool {
+        matches!(self, 
+            TimelockStage::DstWithdrawal | 
+            TimelockStage::DstPublicWithdrawal | 
+            TimelockStage::DstCancellation
+        )
+    }
+
+    /// Check if stage is public (anyone can call)
+    pub fn is_public(&self) -> bool {
+        matches!(self, 
+            TimelockStage::SrcPublicWithdrawal | 
+            TimelockStage::SrcPublicCancellation | 
+            TimelockStage::DstPublicWithdrawal
+        )
+    }
+
+    /// Check if stage is private (only specific parties can call)
+    pub fn is_private(&self) -> bool {
+        !self.is_public()
+    }
+}
+
+/// Sophisticated bit-packed timelocks structure
+/// Matches Solidity TimelocksLib.sol implementation
+/// 
+/// Bit layout (64 bits total):
+/// - Bits 0-31: deployed_at timestamp (32 bits)
+/// - Bits 32-39: src_withdrawal (8 bits, 0-255 hours)
+/// - Bits 40-47: src_public_withdrawal (8 bits, 0-255 hours)
+/// - Bits 48-55: src_cancellation (8 bits, 0-255 hours)
+/// - Bits 56-63: src_public_cancellation (8 bits, 0-255 hours)
+/// - Additional 64 bits for destination timelocks
 #[cw_serde]
-pub struct PackedTimelocks(pub u64);
+pub struct PackedTimelocks {
+    /// Source chain timelocks + deployed_at (64 bits)
+    pub source_data: u64,
+    /// Destination chain timelocks (64 bits)
+    pub destination_data: u64,
+}
 
 impl PackedTimelocks {
-    const MASK: u64 = 0xFF; // 8 bits mask
-    const SHIFT: u64 = 8;   // 8 bits per value
+    // Bit masks and offsets
+    const DEPLOYED_AT_MASK: u64 = 0xFFFFFFFF; // 32 bits
+    const TIMELOCK_MASK: u64 = 0xFF; // 8 bits
+    const TIMELOCK_SHIFT: u64 = 8;
+    const DEPLOYED_AT_OFFSET: u64 = 32;
 
     /// Create packed timelocks from individual values
     pub fn new(
+        deployed_at: u32,
         src_withdrawal: u8,
         src_public_withdrawal: u8,
         src_cancellation: u8,
@@ -30,69 +107,159 @@ impl PackedTimelocks {
         dst_public_withdrawal: u8,
         dst_cancellation: u8,
     ) -> Self {
-        let mut packed = 0u64;
-        packed |= src_withdrawal as u64;
-        packed |= (src_public_withdrawal as u64) << Self::SHIFT;
-        packed |= (src_cancellation as u64) << (Self::SHIFT * 2);
-        packed |= (src_public_cancellation as u64) << (Self::SHIFT * 3);
-        packed |= (dst_withdrawal as u64) << (Self::SHIFT * 4);
-        packed |= (dst_public_withdrawal as u64) << (Self::SHIFT * 5);
-        packed |= (dst_cancellation as u64) << (Self::SHIFT * 6);
-        Self(packed)
+        // Pack source data: deployed_at (32 bits) + 4 timelocks (8 bits each)
+        let mut source_data = deployed_at as u64;
+        source_data |= (src_withdrawal as u64) << Self::DEPLOYED_AT_OFFSET;
+        source_data |= (src_public_withdrawal as u64) << (Self::DEPLOYED_AT_OFFSET + Self::TIMELOCK_SHIFT);
+        source_data |= (src_cancellation as u64) << (Self::DEPLOYED_AT_OFFSET + Self::TIMELOCK_SHIFT * 2);
+        source_data |= (src_public_cancellation as u64) << (Self::DEPLOYED_AT_OFFSET + Self::TIMELOCK_SHIFT * 3);
+
+        // Pack destination data: 3 timelocks (8 bits each)
+        let mut destination_data = 0u64;
+        destination_data |= dst_withdrawal as u64;
+        destination_data |= (dst_public_withdrawal as u64) << Self::TIMELOCK_SHIFT;
+        destination_data |= (dst_cancellation as u64) << (Self::TIMELOCK_SHIFT * 2);
+
+        Self {
+            source_data,
+            destination_data,
+        }
     }
 
-    /// Extract individual timelock values
-    pub fn src_withdrawal(&self) -> u8 {
-        (self.0 & Self::MASK) as u8
+    /// Get deployed_at timestamp
+    pub fn deployed_at(&self) -> u32 {
+        (self.source_data & Self::DEPLOYED_AT_MASK) as u32
     }
 
-    pub fn src_public_withdrawal(&self) -> u8 {
-        ((self.0 >> Self::SHIFT) & Self::MASK) as u8
+    /// Get timelock value for a specific stage (matches Solidity get() function)
+    pub fn get(&self, stage: TimelockStage) -> u8 {
+        match stage {
+            TimelockStage::SrcWithdrawal => {
+                ((self.source_data >> Self::DEPLOYED_AT_OFFSET) & Self::TIMELOCK_MASK) as u8
+            }
+            TimelockStage::SrcPublicWithdrawal => {
+                ((self.source_data >> (Self::DEPLOYED_AT_OFFSET + Self::TIMELOCK_SHIFT)) & Self::TIMELOCK_MASK) as u8
+            }
+            TimelockStage::SrcCancellation => {
+                ((self.source_data >> (Self::DEPLOYED_AT_OFFSET + Self::TIMELOCK_SHIFT * 2)) & Self::TIMELOCK_MASK) as u8
+            }
+            TimelockStage::SrcPublicCancellation => {
+                ((self.source_data >> (Self::DEPLOYED_AT_OFFSET + Self::TIMELOCK_SHIFT * 3)) & Self::TIMELOCK_MASK) as u8
+            }
+            TimelockStage::DstWithdrawal => {
+                (self.destination_data & Self::TIMELOCK_MASK) as u8
+            }
+            TimelockStage::DstPublicWithdrawal => {
+                ((self.destination_data >> Self::TIMELOCK_SHIFT) & Self::TIMELOCK_MASK) as u8
+            }
+            TimelockStage::DstCancellation => {
+                ((self.destination_data >> (Self::TIMELOCK_SHIFT * 2)) & Self::TIMELOCK_MASK) as u8
+            }
+        }
     }
 
-    pub fn src_cancellation(&self) -> u8 {
-        ((self.0 >> (Self::SHIFT * 2)) & Self::MASK) as u8
-    }
-
-    pub fn src_public_cancellation(&self) -> u8 {
-        ((self.0 >> (Self::SHIFT * 3)) & Self::MASK) as u8
-    }
-
-    pub fn dst_withdrawal(&self) -> u8 {
-        ((self.0 >> (Self::SHIFT * 4)) & Self::MASK) as u8
-    }
-
-    pub fn dst_public_withdrawal(&self) -> u8 {
-        ((self.0 >> (Self::SHIFT * 5)) & Self::MASK) as u8
-    }
-
-    pub fn dst_cancellation(&self) -> u8 {
-        ((self.0 >> (Self::SHIFT * 6)) & Self::MASK) as u8
-    }
-
-    /// Get stage time in seconds (converts from hours to seconds)
-    pub fn get_stage_time(&self, stage: TimelockStage, deployed_at: u64) -> u64 {
-        let hours = match stage {
-            TimelockStage::SrcWithdrawal => self.src_withdrawal() as u64,
-            TimelockStage::SrcPublicWithdrawal => self.src_public_withdrawal() as u64,
-            TimelockStage::SrcCancellation => self.src_cancellation() as u64,
-            TimelockStage::SrcPublicCancellation => self.src_public_cancellation() as u64,
-            TimelockStage::DstWithdrawal => self.dst_withdrawal() as u64,
-            TimelockStage::DstPublicWithdrawal => self.dst_public_withdrawal() as u64,
-            TimelockStage::DstCancellation => self.dst_cancellation() as u64,
-        };
+    /// Get stage time in seconds (converts hours to seconds)
+    pub fn get_stage_time(&self, stage: TimelockStage) -> u64 {
+        let hours = self.get(stage) as u64;
+        let deployed_at = self.deployed_at() as u64;
         deployed_at + (hours * 3600) // Convert hours to seconds
     }
 
     /// Check if current time is within a specific stage
-    pub fn is_within_stage(&self, current_time: u64, stage: TimelockStage, deployed_at: u64) -> bool {
-        let stage_time = self.get_stage_time(stage, deployed_at);
+    pub fn is_within_stage(&self, current_time: u64, stage: TimelockStage) -> bool {
+        let stage_time = self.get_stage_time(stage);
         current_time >= stage_time
     }
 
+    /// Check if a stage has passed (current time > stage time)
+    pub fn has_stage_passed(&self, current_time: u64, stage: TimelockStage) -> bool {
+        let stage_time = self.get_stage_time(stage);
+        current_time > stage_time
+    }
+
+    /// Get the first stage that has started based on current time
+    pub fn get_current_stage(&self, current_time: u64) -> Option<TimelockStage> {
+        let stages = [
+            TimelockStage::SrcWithdrawal,
+            TimelockStage::SrcPublicWithdrawal,
+            TimelockStage::SrcCancellation,
+            TimelockStage::SrcPublicCancellation,
+            TimelockStage::DstWithdrawal,
+            TimelockStage::DstPublicWithdrawal,
+            TimelockStage::DstCancellation,
+        ];
+
+        for stage in stages {
+            if self.is_within_stage(current_time, stage) {
+                return Some(stage);
+            }
+        }
+        None
+    }
+
     /// Calculate rescue start time
-    pub fn rescue_start(&self, rescue_delay: u64, deployed_at: u64) -> u64 {
+    pub fn rescue_start(&self, rescue_delay: u64) -> u64 {
+        let deployed_at = self.deployed_at() as u64;
         deployed_at + rescue_delay
+    }
+
+    /// Check if rescue is available (current time >= rescue start)
+    pub fn is_rescue_available(&self, current_time: u64, rescue_delay: u64) -> bool {
+        let rescue_start = self.rescue_start(rescue_delay);
+        current_time >= rescue_start
+    }
+
+    /// Validate timelock values (ensure logical progression)
+    pub fn validate(&self) -> StdResult<()> {
+        let deployed_at = self.deployed_at();
+        if deployed_at == 0 {
+            return Err(StdError::generic_err("Deployed timestamp cannot be zero"));
+        }
+
+        // Validate source chain progression
+        let src_withdrawal = self.get(TimelockStage::SrcWithdrawal);
+        let src_public_withdrawal = self.get(TimelockStage::SrcPublicWithdrawal);
+        let src_cancellation = self.get(TimelockStage::SrcCancellation);
+        let src_public_cancellation = self.get(TimelockStage::SrcPublicCancellation);
+
+        if src_public_withdrawal <= src_withdrawal {
+            return Err(StdError::generic_err("Source public withdrawal must be after private withdrawal"));
+        }
+        if src_cancellation <= src_public_withdrawal {
+            return Err(StdError::generic_err("Source cancellation must be after public withdrawal"));
+        }
+        if src_public_cancellation <= src_cancellation {
+            return Err(StdError::generic_err("Source public cancellation must be after private cancellation"));
+        }
+
+        // Validate destination chain progression
+        let dst_withdrawal = self.get(TimelockStage::DstWithdrawal);
+        let dst_public_withdrawal = self.get(TimelockStage::DstPublicWithdrawal);
+        let dst_cancellation = self.get(TimelockStage::DstCancellation);
+
+        if dst_public_withdrawal <= dst_withdrawal {
+            return Err(StdError::generic_err("Destination public withdrawal must be after private withdrawal"));
+        }
+        if dst_cancellation <= dst_public_withdrawal {
+            return Err(StdError::generic_err("Destination cancellation must be after public withdrawal"));
+        }
+
+        Ok(())
+    }
+
+    /// Get all timelock values as a human-readable format
+    pub fn debug_info(&self) -> String {
+        format!(
+            "Deployed: {}, Src: [{}h, {}h, {}h, {}h], Dst: [{}h, {}h, {}h]",
+            self.deployed_at(),
+            self.get(TimelockStage::SrcWithdrawal),
+            self.get(TimelockStage::SrcPublicWithdrawal),
+            self.get(TimelockStage::SrcCancellation),
+            self.get(TimelockStage::SrcPublicCancellation),
+            self.get(TimelockStage::DstWithdrawal),
+            self.get(TimelockStage::DstPublicWithdrawal),
+            self.get(TimelockStage::DstCancellation),
+        )
     }
 }
 
@@ -132,17 +299,6 @@ impl Timelocks {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TimelockStage {
-    SrcWithdrawal,
-    SrcPublicWithdrawal,
-    SrcCancellation,
-    SrcPublicCancellation,
-    DstWithdrawal,
-    DstPublicWithdrawal,
-    DstCancellation,
-}
-
 /// Core immutables structure (matches Solidity IBaseEscrow.Immutable)
 #[cw_serde]
 pub struct Immutables {
@@ -154,7 +310,6 @@ pub struct Immutables {
     pub amount: Uint128,         // uint256 equivalent
     pub safety_deposit: Uint128, // uint256 equivalent
     pub timelocks: PackedTimelocks, // Packed timelocks
-    pub deployed_at: u64,        // Deployment timestamp
 }
 
 impl Immutables {
@@ -168,8 +323,8 @@ impl Immutables {
         hasher.update(self.token.as_str().as_bytes());
         hasher.update(self.amount.to_string().as_bytes());
         hasher.update(self.safety_deposit.to_string().as_bytes());
-        hasher.update(self.timelocks.0.to_string().as_bytes());
-        hasher.update(self.deployed_at.to_string().as_bytes());
+        hasher.update(self.timelocks.source_data.to_string().as_bytes());
+        hasher.update(self.timelocks.destination_data.to_string().as_bytes());
         
         format!("{:x}", hasher.finalize())
     }
@@ -188,17 +343,31 @@ impl Immutables {
         if self.safety_deposit == Uint128::zero() {
             return Err(StdError::generic_err("Safety deposit cannot be zero"));
         }
+        
+        // Validate timelocks
+        self.timelocks.validate()?;
+        
         Ok(())
     }
 
     /// Get stage time for a specific timelock stage
     pub fn get_stage_time(&self, stage: TimelockStage) -> u64 {
-        self.timelocks.get_stage_time(stage, self.deployed_at)
+        self.timelocks.get_stage_time(stage)
     }
 
     /// Check if current time is within a specific stage
     pub fn is_within_stage(&self, current_time: u64, stage: TimelockStage) -> bool {
-        self.timelocks.is_within_stage(current_time, stage, self.deployed_at)
+        self.timelocks.is_within_stage(current_time, stage)
+    }
+
+    /// Check if rescue is available
+    pub fn is_rescue_available(&self, current_time: u64, rescue_delay: u64) -> bool {
+        self.timelocks.is_rescue_available(current_time, rescue_delay)
+    }
+
+    /// Get current stage based on time
+    pub fn get_current_stage(&self, current_time: u64) -> Option<TimelockStage> {
+        self.timelocks.get_current_stage(current_time)
     }
 }
 
