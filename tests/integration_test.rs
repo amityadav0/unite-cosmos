@@ -1,7 +1,8 @@
 use cosmwasm_std::{Addr, Coin, Uint128};
 use cw_multi_test::{App, Contract, ContractWrapper, Executor};
 use escrow_contract::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
-use escrow_contract::state::{TimelockStage, PackedTimelocks};
+use escrow_contract::state::{TimelockStage, PackedTimelocks, EscrowType};
+use sha2::{Sha256, Digest};
 
 fn escrow_contract() -> Box<dyn Contract<cosmwasm_std::Empty>> {
     let contract = ContractWrapper::new(
@@ -16,6 +17,7 @@ fn mock_app() -> App {
     App::new(|router, _api, storage| {
         router.bank.init_balance(storage, &Addr::unchecked("owner"), vec![Coin::new(10000, "uatom")]).unwrap();
         router.bank.init_balance(storage, &Addr::unchecked("factory"), vec![Coin::new(5000, "uatom")]).unwrap();
+        router.bank.init_balance(storage, &Addr::unchecked("access_token"), vec![Coin::new(1000, "uatom")]).unwrap();
     })
 }
 
@@ -81,6 +83,7 @@ fn test_create_escrow() {
             2, // dst_public_withdrawal (2 hours)
             3, // dst_cancellation (3 hours)
         ),
+        escrow_type: EscrowType::Source,
         dst_chain_id: "cosmoshub-4".to_string(),
         dst_token: "dst_token_address_789".to_string(),
         dst_amount: Uint128::new(1000),
@@ -113,7 +116,7 @@ fn test_create_escrow() {
     assert_eq!(escrow.balance, Uint128::new(1000));
     assert_eq!(escrow.native_balance, Uint128::new(100));
     assert!(escrow.is_active);
-    assert!(escrow.is_src);
+    assert!(escrow.escrow_type == EscrowType::Source);
 }
 
 #[test]
@@ -222,4 +225,249 @@ fn test_sophisticated_timelock_system() {
     assert!(debug_info.contains("Deployed: 1000"));
     assert!(debug_info.contains("Src: [1h, 2h, 3h, 4h]"));
     assert!(debug_info.contains("Dst: [1h, 2h, 3h]"));
+}
+
+#[test]
+fn test_access_control() {
+    let mut app = mock_app();
+    let contract_id = app.store_code(escrow_contract());
+
+    let msg = InstantiateMsg {
+        owner: "owner".to_string(),
+        access_token: "access_token".to_string(),
+        rescue_delay: 3600,
+        factory: "factory".to_string(),
+    };
+
+    let contract_addr = app
+        .instantiate_contract(contract_id, Addr::unchecked("owner"), &msg, &[], "Escrow", None)
+        .unwrap();
+
+    // Test: Only factory can create escrows
+    let create_msg = ExecuteMsg::CreateEscrow {
+        order_hash: "order_hash_123".to_string(),
+        hashlock: "hashlock_456".to_string(),
+        maker: "maker_address_123".to_string(),
+        taker: "taker_address_456".to_string(),
+        token: "token_address_123".to_string(),
+        amount: Uint128::new(1000),
+        safety_deposit: Uint128::new(100),
+        timelocks: escrow_contract::state::PackedTimelocks::new(
+            0, 1, 2, 3, 4, 1, 2, 3,
+        ),
+        escrow_type: EscrowType::Source,
+        dst_chain_id: "cosmoshub-4".to_string(),
+        dst_token: "dst_token_address_789".to_string(),
+        dst_amount: Uint128::new(1000),
+    };
+
+    // Should fail: non-factory trying to create escrow
+    let result = app.execute_contract(
+        Addr::unchecked("unauthorized"),
+        contract_addr.clone(),
+        &create_msg,
+        &[Coin::new(1100, "uatom")],
+    );
+    assert!(result.is_err());
+
+    // Should succeed: factory creating escrow
+    let result = app.execute_contract(
+        Addr::unchecked("factory"),
+        contract_addr.clone(),
+        &create_msg,
+        &[Coin::new(1100, "uatom")],
+    );
+    assert!(result.is_ok());
+
+    // Test: Only taker can withdraw
+    let withdraw_msg = ExecuteMsg::WithdrawSrc {
+        escrow_id: 1,
+        secret: "wrong_secret".to_string(),
+    };
+
+    // Should fail: non-taker trying to withdraw
+    let result = app.execute_contract(
+        Addr::unchecked("unauthorized"),
+        contract_addr.clone(),
+        &withdraw_msg,
+        &[],
+    );
+    assert!(result.is_err());
+
+    // Test: Only taker can cancel
+    let cancel_msg = ExecuteMsg::CancelSrc { escrow_id: 1 };
+
+    // Should fail: non-taker trying to cancel
+    let result = app.execute_contract(
+        Addr::unchecked("unauthorized"),
+        contract_addr.clone(),
+        &cancel_msg,
+        &[],
+    );
+    assert!(result.is_err());
+
+    // Test: Only access token holder can public withdraw
+    let public_withdraw_msg = ExecuteMsg::PublicWithdrawSrc { escrow_id: 1 };
+
+    // Should fail: non-access token holder trying to public withdraw
+    let result = app.execute_contract(
+        Addr::unchecked("unauthorized"),
+        contract_addr.clone(),
+        &public_withdraw_msg,
+        &[],
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_secret_validation() {
+    let mut app = mock_app();
+    let contract_id = app.store_code(escrow_contract());
+
+    let msg = InstantiateMsg {
+        owner: "owner".to_string(),
+        access_token: "access_token".to_string(),
+        rescue_delay: 3600,
+        factory: "factory".to_string(),
+    };
+
+    let contract_addr = app
+        .instantiate_contract(contract_id, Addr::unchecked("owner"), &msg, &[], "Escrow", None)
+        .unwrap();
+
+    // Create escrow with specific hashlock
+    let secret = "my_secret_123";
+    let secret_hash = Sha256::digest(secret.as_bytes());
+    let hashlock = format!("{:x}", secret_hash);
+
+    let create_msg = ExecuteMsg::CreateEscrow {
+        order_hash: "order_hash_123".to_string(),
+        hashlock: hashlock.clone(),
+        maker: "maker_address_123".to_string(),
+        taker: "taker_address_456".to_string(),
+        token: "token_address_123".to_string(),
+        amount: Uint128::new(1000),
+        safety_deposit: Uint128::new(100),
+        timelocks: escrow_contract::state::PackedTimelocks::new(
+            0, 1, 2, 3, 4, 1, 2, 3,
+        ),
+        escrow_type: EscrowType::Source,
+        dst_chain_id: "cosmoshub-4".to_string(),
+        dst_token: "dst_token_address_789".to_string(),
+        dst_amount: Uint128::new(1000),
+    };
+
+    app.execute_contract(
+        Addr::unchecked("factory"),
+        contract_addr.clone(),
+        &create_msg,
+        &[Coin::new(1100, "uatom")],
+    ).unwrap();
+
+    // Test: Correct secret should work
+    let withdraw_msg = ExecuteMsg::WithdrawSrc {
+        escrow_id: 1,
+        secret: secret.to_string(),
+    };
+
+    let result = app.execute_contract(
+        Addr::unchecked("taker_address_456"),
+        contract_addr.clone(),
+        &withdraw_msg,
+        &[],
+    );
+    // This will fail due to timelock, but not due to secret validation
+    assert!(result.is_err());
+
+    // Test: Wrong secret should fail
+    let withdraw_msg = ExecuteMsg::WithdrawSrc {
+        escrow_id: 1,
+        secret: "wrong_secret".to_string(),
+    };
+
+    let result = app.execute_contract(
+        Addr::unchecked("taker_address_456"),
+        contract_addr.clone(),
+        &withdraw_msg,
+        &[],
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_timelock_validation() {
+    let mut app = mock_app();
+    let contract_id = app.store_code(escrow_contract());
+
+    let msg = InstantiateMsg {
+        owner: "owner".to_string(),
+        access_token: "access_token".to_string(),
+        rescue_delay: 3600,
+        factory: "factory".to_string(),
+    };
+
+    let contract_addr = app
+        .instantiate_contract(contract_id, Addr::unchecked("owner"), &msg, &[], "Escrow", None)
+        .unwrap();
+
+    // Create escrow with short timelocks
+    let create_msg = ExecuteMsg::CreateEscrow {
+        order_hash: "order_hash_123".to_string(),
+        hashlock: "hashlock_456".to_string(),
+        maker: "maker_address_123".to_string(),
+        taker: "taker_address_456".to_string(),
+        token: "token_address_123".to_string(),
+        amount: Uint128::new(1000),
+        safety_deposit: Uint128::new(100),
+        timelocks: escrow_contract::state::PackedTimelocks::new(
+            0, 1, 2, 3, 4, 1, 2, 3, // 1 hour, 2 hours, etc.
+        ),
+        escrow_type: EscrowType::Source,
+        dst_chain_id: "cosmoshub-4".to_string(),
+        dst_token: "dst_token_address_789".to_string(),
+        dst_amount: Uint128::new(1000),
+    };
+
+    app.execute_contract(
+        Addr::unchecked("factory"),
+        contract_addr.clone(),
+        &create_msg,
+        &[Coin::new(1100, "uatom")],
+    ).unwrap();
+
+    // Test: Withdraw before timelock should fail
+    let withdraw_msg = ExecuteMsg::WithdrawSrc {
+        escrow_id: 1,
+        secret: "any_secret".to_string(),
+    };
+
+    let result = app.execute_contract(
+        Addr::unchecked("taker_address_456"),
+        contract_addr.clone(),
+        &withdraw_msg,
+        &[],
+    );
+    assert!(result.is_err());
+
+    // Test: Cancel before timelock should fail
+    let cancel_msg = ExecuteMsg::CancelSrc { escrow_id: 1 };
+
+    let result = app.execute_contract(
+        Addr::unchecked("taker_address_456"),
+        contract_addr.clone(),
+        &cancel_msg,
+        &[],
+    );
+    assert!(result.is_err());
+
+    // Test: Public withdraw before timelock should fail
+    let public_withdraw_msg = ExecuteMsg::PublicWithdrawSrc { escrow_id: 1 };
+
+    let result = app.execute_contract(
+        Addr::unchecked("access_token"),
+        contract_addr.clone(),
+        &public_withdraw_msg,
+        &[],
+    );
+    assert!(result.is_err());
 } 

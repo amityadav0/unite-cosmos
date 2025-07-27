@@ -21,7 +21,7 @@ pub fn query_escrow(deps: Deps, escrow_id: u64) -> StdResult<EscrowResponse> {
         escrow_id,
         immutables: escrow_state.escrow_info.immutables,
         dst_complement: escrow_state.escrow_info.dst_complement,
-        is_src: escrow_state.escrow_info.is_src,
+        escrow_type: escrow_state.escrow_info.escrow_type,
         is_active: escrow_state.escrow_info.is_active,
         balance: escrow_state.balance,
         native_balance: escrow_state.native_balance,
@@ -35,7 +35,7 @@ pub fn query_escrows(
     limit: Option<u32>,
 ) -> StdResult<EscrowsResponse> {
     let limit = limit.unwrap_or(30) as usize;
-    let start = start_after.map(Bound::exclusive);
+    let start = start_after.map(|id| Bound::exclusive(id));
 
     let escrows: StdResult<Vec<EscrowResponse>> = ESCROWS
         .range(deps.storage, start, None, Order::Ascending)
@@ -46,7 +46,7 @@ pub fn query_escrows(
                 escrow_id,
                 immutables: escrow_state.escrow_info.immutables,
                 dst_complement: escrow_state.escrow_info.dst_complement,
-                is_src: escrow_state.escrow_info.is_src,
+                escrow_type: escrow_state.escrow_info.escrow_type,
                 is_active: escrow_state.escrow_info.is_active,
                 balance: escrow_state.balance,
                 native_balance: escrow_state.native_balance,

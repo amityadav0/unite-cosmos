@@ -1,6 +1,6 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::{Addr, Uint128};
-use crate::state::{Immutables, PackedTimelocks, DstImmutablesComplement};
+use crate::state::{Immutables, PackedTimelocks, DstImmutablesComplement, EscrowType};
 
 #[cw_serde]
 pub struct InstantiateMsg {
@@ -21,10 +21,37 @@ pub enum ExecuteMsg {
         amount: Uint128,
         safety_deposit: Uint128,
         timelocks: PackedTimelocks,
+        escrow_type: EscrowType, // Source or Destination
         dst_chain_id: String,
         dst_token: String,
         dst_amount: Uint128,
     },
+    // Source-specific operations
+    WithdrawSrc {
+        escrow_id: u64,
+        secret: String,
+    },
+    CancelSrc {
+        escrow_id: u64,
+    },
+    PublicWithdrawSrc {
+        escrow_id: u64,
+    },
+    PublicCancelSrc {
+        escrow_id: u64,
+    },
+    // Destination-specific operations
+    WithdrawDst {
+        escrow_id: u64,
+        secret: String,
+    },
+    CancelDst {
+        escrow_id: u64,
+    },
+    PublicWithdrawDst {
+        escrow_id: u64,
+    },
+    // Generic operations (for backward compatibility)
     Withdraw {
         escrow_id: u64,
         secret: String,
@@ -32,10 +59,14 @@ pub enum ExecuteMsg {
     Cancel {
         escrow_id: u64,
     },
-    RescueFunds {
+    PublicWithdraw {
         escrow_id: u64,
-        token: String,
-        amount: Uint128,
+    },
+    PublicCancel {
+        escrow_id: u64,
+    },
+    Rescue {
+        escrow_id: u64,
     },
 }
 
@@ -65,7 +96,7 @@ pub struct EscrowResponse {
     pub escrow_id: u64,
     pub immutables: Immutables,
     pub dst_complement: Option<DstImmutablesComplement>,
-    pub is_src: bool,
+    pub escrow_type: EscrowType,
     pub is_active: bool,
     pub balance: Uint128,
     pub native_balance: Uint128,

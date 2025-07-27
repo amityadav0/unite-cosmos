@@ -11,6 +11,78 @@ pub struct Config {
     pub factory: Addr,
 }
 
+/// Escrow type to differentiate source vs destination behavior
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub enum EscrowType {
+    Source,     // EscrowSrc behavior
+    Destination, // EscrowDst behavior
+}
+
+impl EscrowType {
+    /// Check if this is a source escrow
+    pub fn is_source(&self) -> bool {
+        matches!(self, EscrowType::Source)
+    }
+
+    /// Check if this is a destination escrow
+    pub fn is_destination(&self) -> bool {
+        matches!(self, EscrowType::Destination)
+    }
+
+    /// Get the appropriate withdrawal recipient based on escrow type
+    pub fn get_withdrawal_recipient(&self, maker: &Addr, taker: &Addr) -> Addr {
+        match self {
+            EscrowType::Source => taker.clone(),
+            EscrowType::Destination => maker.clone(),
+        }
+    }
+
+    /// Get the appropriate cancellation recipient based on escrow type
+    pub fn get_cancellation_recipient(&self, maker: &Addr, taker: &Addr) -> Addr {
+        match self {
+            EscrowType::Source => maker.clone(),
+            EscrowType::Destination => taker.clone(),
+        }
+    }
+
+    /// Get the appropriate withdrawal stage based on escrow type
+    pub fn get_withdrawal_stage(&self) -> TimelockStage {
+        match self {
+            EscrowType::Source => TimelockStage::SrcWithdrawal,
+            EscrowType::Destination => TimelockStage::DstWithdrawal,
+        }
+    }
+
+    /// Get the appropriate cancellation stage based on escrow type
+    pub fn get_cancellation_stage(&self) -> TimelockStage {
+        match self {
+            EscrowType::Source => TimelockStage::SrcCancellation,
+            EscrowType::Destination => TimelockStage::DstCancellation,
+        }
+    }
+
+    /// Get the appropriate public withdrawal stage based on escrow type
+    pub fn get_public_withdrawal_stage(&self) -> TimelockStage {
+        match self {
+            EscrowType::Source => TimelockStage::SrcPublicWithdrawal,
+            EscrowType::Destination => TimelockStage::DstPublicWithdrawal,
+        }
+    }
+
+    /// Get the appropriate public cancellation stage based on escrow type
+    pub fn get_public_cancellation_stage(&self) -> Option<TimelockStage> {
+        match self {
+            EscrowType::Source => Some(TimelockStage::SrcPublicCancellation),
+            EscrowType::Destination => None, // Destination has no public cancellation
+        }
+    }
+
+    /// Check if this escrow type supports public cancellation
+    pub fn supports_public_cancellation(&self) -> bool {
+        self.get_public_cancellation_stage().is_some()
+    }
+}
+
 /// Timelock stages matching Solidity enum
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimelockStage {
@@ -68,6 +140,15 @@ impl TimelockStage {
     /// Check if stage is private (only specific parties can call)
     pub fn is_private(&self) -> bool {
         !self.is_public()
+    }
+
+    /// Get the escrow type for this stage
+    pub fn get_escrow_type(&self) -> EscrowType {
+        if self.is_source() {
+            EscrowType::Source
+        } else {
+            EscrowType::Destination
+        }
     }
 }
 
@@ -177,7 +258,7 @@ impl PackedTimelocks {
         current_time > stage_time
     }
 
-    /// Get the first stage that has started based on current time
+    /// Get the next valid stage based on current time
     pub fn get_current_stage(&self, current_time: u64) -> Option<TimelockStage> {
         let stages = [
             TimelockStage::SrcWithdrawal,
@@ -386,7 +467,7 @@ pub struct DstImmutablesComplement {
 pub struct EscrowInfo {
     pub immutables: Immutables,
     pub dst_complement: Option<DstImmutablesComplement>,
-    pub is_src: bool,
+    pub escrow_type: EscrowType, // Source or Destination
     pub is_active: bool,
     pub created_at: Timestamp,
 }
