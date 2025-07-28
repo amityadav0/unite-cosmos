@@ -386,41 +386,7 @@ impl PackedTimelocks {
     }
 }
 
-/// Legacy timelocks structure (for backward compatibility)
-#[cw_serde]
-pub struct Timelocks {
-    pub src_withdrawal: u64,
-    pub src_public_withdrawal: u64,
-    pub src_cancellation: u64,
-    pub src_public_cancellation: u64,
-    pub dst_withdrawal: u64,
-    pub dst_public_withdrawal: u64,
-    pub dst_cancellation: u64,
-    pub deployed_at: u64,
-}
 
-impl Timelocks {
-    pub fn get_stage_time(&self, stage: TimelockStage) -> u64 {
-        match stage {
-            TimelockStage::SrcWithdrawal => self.deployed_at + self.src_withdrawal,
-            TimelockStage::SrcPublicWithdrawal => self.deployed_at + self.src_public_withdrawal,
-            TimelockStage::SrcCancellation => self.deployed_at + self.src_cancellation,
-            TimelockStage::SrcPublicCancellation => self.deployed_at + self.src_public_cancellation,
-            TimelockStage::DstWithdrawal => self.deployed_at + self.dst_withdrawal,
-            TimelockStage::DstPublicWithdrawal => self.deployed_at + self.dst_public_withdrawal,
-            TimelockStage::DstCancellation => self.deployed_at + self.dst_cancellation,
-        }
-    }
-
-    pub fn is_within_stage(&self, current_time: u64, stage: TimelockStage) -> bool {
-        let stage_time = self.get_stage_time(stage);
-        current_time >= stage_time
-    }
-
-    pub fn rescue_start(&self, rescue_delay: u64) -> u64 {
-        self.deployed_at + rescue_delay
-    }
-}
 
 /// Core immutables structure (matches Solidity IBaseEscrow.Immutable)
 #[cw_serde]
