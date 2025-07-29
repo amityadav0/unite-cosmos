@@ -8,11 +8,10 @@ use sha2::{Sha256, Digest};
 use crate::error::ContractError;
 use crate::msg::InstantiateMsg;
 use crate::state::{
-    Config, CONFIG, ESCROWS, ESCROW_COUNTER
+    Config, CONFIG, ESCROWS, ESCROW_COUNTER, TimelockStage
 };
 
 // Import factory functions
-
 pub fn execute_instantiate(
     deps: DepsMut,
     _info: MessageInfo,
@@ -88,13 +87,15 @@ pub fn execute_withdraw_src(
         return Err(ContractError::InvalidSecret {});
     }
 
-    // Timelock validation
+    // Timelock validation: allow in both PRIVATE and PUBLIC withdrawal stages
     let current_time = env.block.time.seconds();
-    let stage = escrow_state.escrow_info.escrow_type.get_withdrawal_stage();
-
-    if !immutables.timelocks.is_within_stage(current_time, stage) {
+    let private_stage = TimelockStage::SrcWithdrawal;
+    let public_stage = TimelockStage::SrcPublicWithdrawal;
+    let in_private = immutables.timelocks.is_within_stage(current_time, private_stage);
+    let in_public = immutables.timelocks.is_within_stage(current_time, public_stage);
+    if !(in_private || in_public) {
         return Err(ContractError::TimelockNotExpired { 
-            stage: format!("{stage:?}") 
+            stage: "SrcWithdrawal or SrcPublicWithdrawal".to_string() 
         });
     }
 
@@ -405,7 +406,7 @@ pub fn execute_public_withdraw_src(
 
     // Access control: only access token holder can public withdraw
     let config = CONFIG.load(deps.storage)?;
-    if info.sender != config.access_token {
+    if info.sender != config.access_token { // TODO:FIX access token holder
         return Err(ContractError::OnlyAccessTokenHolder {});
     }
 
@@ -644,6 +645,11 @@ pub fn execute_rescue(
         return Err(ContractError::EscrowNotActive { escrow_id });
     }
 
+    // Access control: only taker can rescue funds
+    if info.sender != escrow_state.escrow_info.immutables.taker {
+        return Err(ContractError::OnlyTaker {});
+    }
+
     let immutables = &escrow_state.escrow_info.immutables;
     
     // Rescue delay validation
@@ -656,7 +662,7 @@ pub fn execute_rescue(
         });
     }
 
-    // Transfer all funds to caller
+    // Transfer all funds to caller (taker)
     let mut messages: Vec<CosmosMsg> = vec![];
 
     if escrow_state.balance > Uint128::zero() {

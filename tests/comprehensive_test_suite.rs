@@ -1,4 +1,4 @@
-use cosmwasm_std::{Addr, Coin, Uint128, Timestamp};
+use cosmwasm_std::{Addr, Coin, Uint128};
 use cw_multi_test::{App, Contract, ContractWrapper, Executor};
 use escrow_contract::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 use escrow_contract::state::{TimelockStage, PackedTimelocks, EscrowType, EscrowCreationParams};
