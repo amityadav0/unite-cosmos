@@ -48,6 +48,9 @@ pub enum ContractError {
     #[error("Rescue delay not met: {current} < {required}")]
     RescueDelayNotMet { current: u64, required: u64 },
 
+    #[error("Invalid creation time")]
+    InvalidCreationTime {},
+
     // State Errors
     #[error("Escrow not found: id {escrow_id}")]
     EscrowNotFound { escrow_id: u64 },

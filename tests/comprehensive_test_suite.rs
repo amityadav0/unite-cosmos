@@ -831,10 +831,10 @@ fn test_minimum_timelock_values() {
 fn test_large_amount_values() {
     let (mut app, contract_addr) = setup_contract();
 
-    // Test with very large amounts
+    // Test with very large amounts but safety deposit within limits
     let mut params = create_test_escrow_params();
     params.amount = Uint128::new(1000000000000); // 1 trillion
-    params.safety_deposit = Uint128::new(100000000000); // 100 billion
+    params.safety_deposit = Uint128::new(10000); // Maximum allowed safety deposit
 
     let create_msg = ExecuteMsg::CreateEscrow {
         params,
@@ -848,5 +848,8 @@ fn test_large_amount_values() {
         &[Coin::new(10, "uatom")],
     );
 
+    if let Err(err) = &result {
+        println!("Test failed with error: {:?}", err);
+    }
     assert!(result.is_ok());
 } 

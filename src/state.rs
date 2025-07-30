@@ -2,6 +2,7 @@ use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{Addr, Uint128, Timestamp, StdResult, StdError};
 use cw_storage_plus::{Item, Map};
 use sha2::{Sha256, Digest};
+use serde::{Serialize, Deserialize};
 
 #[cw_serde]
 pub struct Config {
@@ -9,53 +10,6 @@ pub struct Config {
     pub access_token: Addr,
     pub rescue_delay: u64,
     pub factory: Addr,
-}
-
-/// Factory configuration for escrow creation
-#[cw_serde]
-pub struct FactoryConfig {
-    pub owner: Addr,
-    pub escrow_contract: Addr, // Address of the escrow contract
-    pub access_token: Addr,
-    pub rescue_delay: u64,
-    pub min_safety_deposit: Uint128,
-    pub max_safety_deposit: Uint128,
-    pub creation_fee: Uint128,
-}
-
-/// Escrow creation parameters
-#[cw_serde]
-pub struct EscrowCreationParams {
-    pub order_hash: String,
-    pub hashlock: String,
-    pub maker: Addr,
-    pub taker: Addr,
-    pub token: Addr,
-    pub amount: Uint128,
-    pub safety_deposit: Uint128,
-    pub timelocks: PackedTimelocks,
-    pub escrow_type: EscrowType,
-    pub dst_chain_id: String,
-    pub dst_token: Addr,
-    pub dst_amount: Uint128,
-}
-
-/// Escrow creation request for post-interaction processing
-#[cw_serde]
-pub struct EscrowCreationRequest {
-    pub params: EscrowCreationParams,
-    pub created_at: Timestamp,
-    pub status: CreationStatus,
-    pub escrow_address: Option<Addr>,
-}
-
-/// Status of escrow creation
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-pub enum CreationStatus {
-    Pending,
-    Created,
-    Failed,
-    Cancelled,
 }
 
 /// Escrow type to differentiate source vs destination behavior
@@ -386,8 +340,6 @@ impl PackedTimelocks {
     }
 }
 
-
-
 /// Core immutables structure (matches Solidity IBaseEscrow.Immutable)
 #[cw_serde]
 pub struct Immutables {
@@ -494,11 +446,6 @@ pub const ESCROWS: Map<u64, EscrowState> = Map::new("escrows");
 pub const ESCROW_COUNTER: Item<u64> = Item::new("escrow_counter");
 pub const ESCROW_BY_HASH: Map<String, u64> = Map::new("escrow_by_hash");
 
-// Factory storage keys
-pub const FACTORY_CONFIG: Item<FactoryConfig> = Item::new("factory_config");
-pub const ESCROW_CREATION_REQUESTS: Map<String, EscrowCreationRequest> = Map::new("escrow_creation_requests");
-pub const ESCROW_ADDRESSES: Map<String, Addr> = Map::new("escrow_addresses"); // hash -> address mapping
-
 /// Storage helper functions
 pub fn get_next_escrow_id(storage: &mut dyn cosmwasm_std::Storage) -> StdResult<u64> {
     let current_id = ESCROW_COUNTER.load(storage).unwrap_or(0);
@@ -546,67 +493,4 @@ pub fn escrow_exists_by_hash(
     hash: String,
 ) -> bool {
     ESCROW_BY_HASH.has(storage, hash)
-}
-
-/// Generate deterministic escrow address (CosmWasm equivalent of Create2)
-pub fn compute_escrow_address(
-    factory_address: &Addr,
-    order_hash: &str,
-    hashlock: &str,
-    salt: &str,
-) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(factory_address.as_str().as_bytes());
-    hasher.update(order_hash.as_bytes());
-    hasher.update(hashlock.as_bytes());
-    hasher.update(salt.as_bytes());
-    
-    format!("{:x}", hasher.finalize())
-}
-
-/// Validate escrow creation parameters
-pub fn validate_escrow_creation(
-    params: &EscrowCreationParams,
-    config: &FactoryConfig,
-) -> StdResult<()> {
-    // Validate basic parameters
-    if params.order_hash.is_empty() {
-        return Err(StdError::generic_err("Order hash cannot be empty"));
-    }
-    if params.hashlock.is_empty() {
-        return Err(StdError::generic_err("Hashlock cannot be empty"));
-    }
-    if params.amount == Uint128::zero() {
-        return Err(StdError::generic_err("Amount cannot be zero"));
-    }
-    if params.dst_amount == Uint128::zero() {
-        return Err(StdError::generic_err("Destination amount cannot be zero"));
-    }
-
-    // Validate safety deposit range
-    if params.safety_deposit < config.min_safety_deposit {
-        return Err(StdError::generic_err(format!(
-            "Safety deposit {} is below minimum {}",
-            params.safety_deposit,
-            config.min_safety_deposit
-        )));
-    }
-    if params.safety_deposit > config.max_safety_deposit {
-        return Err(StdError::generic_err(format!(
-            "Safety deposit {} is above maximum {}",
-            params.safety_deposit,
-            config.max_safety_deposit
-        )));
-    }
-
-    // Note: We don't validate timelocks here because deployed_at will be set by the factory
-    // The timelocks will be validated after the factory sets the proper deployed_at timestamp
-
-    // Validate cross-chain parameters for source escrows
-    if params.escrow_type.is_source()
-        && params.dst_chain_id.is_empty() {
-            return Err(StdError::generic_err("Destination chain ID cannot be empty for source escrows"));
-        }
-
-    Ok(())
 } 
