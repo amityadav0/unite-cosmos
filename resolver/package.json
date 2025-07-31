@@ -7,6 +7,9 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
+    "demo": "node run-demo.js",
+    "demo:eth-to-osmo": "node run-demo.js eth-to-osmo",
+    "demo:osmo-to-eth": "node run-demo.js osmo-to-eth",
     "test": "jest",
     "lint": "eslint src/**/*.ts",
     "format": "prettier --write src/**/*.ts"

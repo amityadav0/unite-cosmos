@@ -66,6 +66,9 @@ export class EthereumClient {
       if (!this.factoryContract) {
         throw new Error('Factory contract not initialized');
       }
+      if (!this.factoryContract) {
+        throw new Error('Factory contract not initialized');
+      }
       const address = await this.factoryContract['addressOfEscrowSrc'](
         hashlock,
         maker,
@@ -143,7 +146,10 @@ export class EthereumClient {
       const abi = isSource ? ESCROW_SRC_ABI : ESCROW_DST_ABI;
       const escrowContract = new ethers.Contract(escrowAddress, abi, this.wallet);
 
-      const tx = await escrowContract.withdraw(secret, {
+      if (!escrowContract) {
+        throw new Error('Escrow contract not initialized');
+      }
+      const tx = await escrowContract['withdraw'](secret, {
         gasLimit: this.config.gasLimit || 200000,
         gasPrice: this.config.gasPrice ? ethers.parseUnits(this.config.gasPrice, 'gwei') : undefined
       });
@@ -173,7 +179,10 @@ export class EthereumClient {
       const abi = isSource ? ESCROW_SRC_ABI : ESCROW_DST_ABI;
       const escrowContract = new ethers.Contract(escrowAddress, abi, this.wallet);
 
-      const tx = await escrowContract.cancel({
+      if (!escrowContract) {
+        throw new Error('Escrow contract not initialized');
+      }
+      const tx = await escrowContract['cancel']({
         gasLimit: this.config.gasLimit || 200000,
         gasPrice: this.config.gasPrice ? ethers.parseUnits(this.config.gasPrice, 'gwei') : undefined
       });

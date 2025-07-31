@@ -196,7 +196,10 @@ export class UserOperations {
     isSource: boolean = true
   ): Promise<WithdrawResult> {
     try {
-      const accounts = await this.cosmosClient.getAccounts();
+      const accounts = await this.cosmosWallet.getAccounts();
+      if (!accounts[0]) {
+        throw new Error('No accounts found in wallet');
+      }
       const sender = accounts[0].address;
 
       const msg = {
@@ -278,7 +281,10 @@ export class UserOperations {
     isSource: boolean = true
   ): Promise<CancelResult> {
     try {
-      const accounts = await this.cosmosClient.getAccounts();
+      const accounts = await this.cosmosWallet.getAccounts();
+      if (!accounts[0]) {
+        throw new Error('No accounts found in wallet');
+      }
       const sender = accounts[0].address;
 
       const msg = {
@@ -396,7 +402,10 @@ export class UserOperations {
     isSource: boolean = true
   ): Promise<WithdrawResult> {
     try {
-      const accounts = await this.cosmosClient.getAccounts();
+      const accounts = await this.cosmosWallet.getAccounts();
+      if (!accounts[0]) {
+        throw new Error('No accounts found in wallet');
+      }
       const sender = accounts[0].address;
 
       const msg = {
@@ -436,7 +445,10 @@ export class UserOperations {
     isSource: boolean = true
   ): Promise<CancelResult> {
     try {
-      const accounts = await this.cosmosClient.getAccounts();
+      const accounts = await this.cosmosWallet.getAccounts();
+      if (!accounts[0]) {
+        throw new Error('No accounts found in wallet');
+      }
       const sender = accounts[0].address;
 
       const msg = {
@@ -536,7 +548,10 @@ export class UserOperations {
    * Get user's Cosmos address
    */
   async getCosmosAddress(): Promise<string> {
-    const accounts = await this.cosmosClient.getAccounts();
+    const accounts = await this.cosmosWallet.getAccounts();
+    if (!accounts[0]) {
+      throw new Error('No accounts found in wallet');
+    }
     return accounts[0].address;
   }
 } 

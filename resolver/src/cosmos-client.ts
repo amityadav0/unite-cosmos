@@ -52,6 +52,9 @@ export class CosmosClient {
   ): Promise<string> {
     try {
       const accounts = await this.wallet.getAccounts();
+      if (!accounts[0]) {
+        throw new Error('No accounts found in wallet');
+      }
       const sender = accounts[0].address;
 
       const msg = {
@@ -73,7 +76,7 @@ export class CosmosClient {
       );
 
       // Extract escrow address from events
-      const escrowAddress = this.extractEscrowAddressFromEvents(result.events);
+      const escrowAddress = this.extractEscrowAddressFromEvents([...result.events]);
       if (!escrowAddress) {
         throw new Error('Escrow address not found in transaction events');
       }
@@ -97,6 +100,9 @@ export class CosmosClient {
   ): Promise<string> {
     try {
       const accounts = await this.wallet.getAccounts();
+      if (!accounts[0]) {
+        throw new Error('No accounts found in wallet');
+      }
       const sender = accounts[0].address;
 
       const msg = {
@@ -118,7 +124,7 @@ export class CosmosClient {
       );
 
       // Extract escrow address from events
-      const escrowAddress = this.extractEscrowAddressFromEvents(result.events);
+      const escrowAddress = this.extractEscrowAddressFromEvents([...result.events]);
       if (!escrowAddress) {
         throw new Error('Escrow address not found in transaction events');
       }

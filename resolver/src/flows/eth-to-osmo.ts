@@ -1,7 +1,7 @@
 import { CrossChainResolver } from '../resolver';
 import { UserOperations } from '../user-operations';
 import { ResolverConfig, UserConfig, EscrowConfig, ChainType } from '../types';
-import { generateSecretAndHashlock, toWei, toMicroUnits } from '../utils';
+import { generateSecretAndHashlock, toWei } from '../utils';
 import dotenv from 'dotenv';
 
 // Load environment variables
@@ -12,23 +12,23 @@ const createTestnetConfig = (): { resolver: ResolverConfig; user: UserConfig } =
   return {
     resolver: {
       ethereum: {
-        rpcUrl: process.env.ETHEREUM_TESTNET_RPC_URL || 'https://sepolia.infura.io/v3/your-api-key',
-        chainId: process.env.ETHEREUM_TESTNET_CHAIN_ID || '11155111', // Sepolia
-        privateKey: process.env.ETHEREUM_TESTNET_PRIVATE_KEY || '',
-        escrowFactoryAddress: process.env.ETHEREUM_TESTNET_ESCROW_FACTORY_ADDRESS || '',
-        escrowSrcAddress: process.env.ETHEREUM_TESTNET_ESCROW_SRC_ADDRESS || '',
-        escrowDstAddress: process.env.ETHEREUM_TESTNET_ESCROW_DST_ADDRESS || '',
-        gasPrice: process.env.ETHEREUM_TESTNET_GAS_PRICE || '5',
-        gasLimit: parseInt(process.env.ETHEREUM_TESTNET_GAS_LIMIT || '500000')
+        rpcUrl: process.env['ETHEREUM_TESTNET_RPC_URL'] || 'https://sepolia.infura.io/v3/your-api-key',
+        chainId: process.env['ETHEREUM_TESTNET_CHAIN_ID'] || '11155111', // Sepolia
+        privateKey: process.env['ETHEREUM_TESTNET_PRIVATE_KEY'] || '',
+        escrowFactoryAddress: process.env['ETHEREUM_TESTNET_ESCROW_FACTORY_ADDRESS'] || '',
+        escrowSrcAddress: process.env['ETHEREUM_TESTNET_ESCROW_SRC_ADDRESS'] || '',
+        escrowDstAddress: process.env['ETHEREUM_TESTNET_ESCROW_DST_ADDRESS'] || '',
+        gasPrice: process.env['ETHEREUM_TESTNET_GAS_PRICE'] || '5',
+        gasLimit: parseInt(process.env['ETHEREUM_TESTNET_GAS_LIMIT'] || '500000')
       },
-      cosmos: {
-        rpcUrl: process.env.OSMOSIS_TESTNET_RPC_URL || 'https://rpc.testnet.osmosis.zone:26657',
-        chainId: process.env.OSMOSIS_TESTNET_CHAIN_ID || 'osmo-test-5',
-        mnemonic: process.env.OSMOSIS_TESTNET_MNEMONIC || '',
-        escrowContractAddress: process.env.OSMOSIS_TESTNET_ESCROW_CONTRACT_ADDRESS || '',
-        prefix: process.env.OSMOSIS_TESTNET_PREFIX || 'osmo',
-        denom: process.env.OSMOSIS_TESTNET_DENOM || 'uosmo'
-      }
+              cosmos: {
+          rpcUrl: process.env['OSMOSIS_TESTNET_RPC_URL'] || 'https://rpc.testnet.osmosis.zone:26657',
+          chainId: process.env['OSMOSIS_TESTNET_CHAIN_ID'] || 'osmo-test-5',
+          mnemonic: process.env['OSMOSIS_TESTNET_MNEMONIC'] || '',
+          escrowContractAddress: process.env['OSMOSIS_TESTNET_ESCROW_CONTRACT_ADDRESS'] || '',
+          prefix: process.env['OSMOSIS_TESTNET_PREFIX'] || 'osmo',
+          denom: process.env['OSMOSIS_TESTNET_DENOM'] || 'uosmo'
+        }
     },
     user: {
       ethereum: {
