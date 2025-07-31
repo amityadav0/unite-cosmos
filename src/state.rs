@@ -2,7 +2,6 @@ use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{Addr, Uint128, Timestamp, StdResult, StdError};
 use cw_storage_plus::{Item, Map};
 use sha2::{Sha256, Digest};
-use serde::{Serialize, Deserialize};
 
 #[cw_serde]
 pub struct Config {
@@ -444,7 +443,6 @@ pub struct EscrowState {
 pub const CONFIG: Item<Config> = Item::new("config");
 pub const ESCROWS: Map<u64, EscrowState> = Map::new("escrows");
 pub const ESCROW_COUNTER: Item<u64> = Item::new("escrow_counter");
-pub const ESCROW_BY_HASH: Map<String, u64> = Map::new("escrow_by_hash");
 
 /// Storage helper functions
 pub fn get_next_escrow_id(storage: &mut dyn cosmwasm_std::Storage) -> StdResult<u64> {
@@ -454,43 +452,10 @@ pub fn get_next_escrow_id(storage: &mut dyn cosmwasm_std::Storage) -> StdResult<
     Ok(next_id)
 }
 
-/// Save escrow with hash mapping
-pub fn save_escrow(
-    storage: &mut dyn cosmwasm_std::Storage,
-    escrow_id: u64,
-    escrow_state: &EscrowState,
-) -> StdResult<()> {
-    let escrow_hash = escrow_state.escrow_info.immutables.hash();
-    
-    // Save escrow by ID
-    ESCROWS.save(storage, escrow_id, escrow_state)?;
-    
-    // Save escrow by hash for deterministic lookup
-    ESCROW_BY_HASH.save(storage, escrow_hash, &escrow_id)?;
-    
-    Ok(())
-}
-
 /// Load escrow by ID
 pub fn load_escrow(
     storage: &dyn cosmwasm_std::Storage,
     escrow_id: u64,
 ) -> StdResult<EscrowState> {
     ESCROWS.load(storage, escrow_id)
-}
-
-/// Load escrow by hash
-pub fn load_escrow_by_hash(
-    storage: &dyn cosmwasm_std::Storage,
-    hash: String,
-) -> StdResult<Option<u64>> {
-    ESCROW_BY_HASH.may_load(storage, hash)
-}
-
-/// Check if escrow exists by hash
-pub fn escrow_exists_by_hash(
-    storage: &dyn cosmwasm_std::Storage,
-    hash: String,
-) -> bool {
-    ESCROW_BY_HASH.has(storage, hash)
 } 

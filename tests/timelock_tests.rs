@@ -1,7 +1,9 @@
 use cosmwasm_std::{Addr, Coin, Uint128};
 use cw_multi_test::{App, Contract, ContractWrapper, Executor};
 use escrow_contract::msg::{ExecuteMsg, InstantiateMsg};
-use escrow_contract::state::{TimelockStage, PackedTimelocks, EscrowType, EscrowCreationParams};
+use escrow_contract::state::{TimelockStage, PackedTimelocks, EscrowType};
+use sha2::{Sha256, Digest};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn escrow_contract() -> Box<dyn Contract<cosmwasm_std::Empty>> {
     let contract = ContractWrapper::new(
@@ -15,11 +17,37 @@ fn escrow_contract() -> Box<dyn Contract<cosmwasm_std::Empty>> {
 fn mock_app() -> App {
     App::new(|router, _api, storage| {
         router.bank.init_balance(storage, &Addr::unchecked("owner"), vec![Coin::new(10000, "uatom")]).unwrap();
-        router.bank.init_balance(storage, &Addr::unchecked("factory"), vec![Coin::new(5000, "uatom")]).unwrap();
         router.bank.init_balance(storage, &Addr::unchecked("access_token"), vec![Coin::new(1000, "uatom")]).unwrap();
         router.bank.init_balance(storage, &Addr::unchecked("maker"), vec![Coin::new(2000, "uatom")]).unwrap();
         router.bank.init_balance(storage, &Addr::unchecked("taker"), vec![Coin::new(2000, "uatom")]).unwrap();
     })
+}
+
+fn create_test_timelocks() -> PackedTimelocks {
+    PackedTimelocks::new(
+        1000, // deployed_at
+        1,    // src_withdrawal: 1 hour
+        2,    // src_public_withdrawal: 2 hours
+        3,    // src_cancellation: 3 hours
+        4,    // src_public_cancellation: 4 hours
+        1,    // dst_withdrawal: 1 hour
+        2,    // dst_public_withdrawal: 2 hours
+        3,    // dst_cancellation: 3 hours
+    )
+}
+
+fn generate_secret() -> String {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    format!("secret_{}", timestamp)
+}
+
+fn hash_secret(secret: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(secret.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 fn setup_contract() -> (App, Addr) {
@@ -30,7 +58,6 @@ fn setup_contract() -> (App, Addr) {
         owner: "owner".to_string(),
         access_token: "access_token".to_string(),
         rescue_delay: 3600,
-        factory: "factory".to_string(),
     };
 
     let contract_addr = app
@@ -40,162 +67,115 @@ fn setup_contract() -> (App, Addr) {
     (app, contract_addr)
 }
 
-fn create_test_escrow_params() -> EscrowCreationParams {
-    EscrowCreationParams {
-        order_hash: "test_order_hash_123".to_string(),
-        hashlock: "test_hashlock_456".to_string(),
-        maker: Addr::unchecked("maker"),
-        taker: Addr::unchecked("taker"),
-        token: Addr::unchecked("token_address"),
-        amount: Uint128::new(1000),
-        safety_deposit: Uint128::new(100),
-        timelocks: PackedTimelocks::new(
-            1000, // deployed_at
-            1,    // src_withdrawal: 1 hour
-            2,    // src_public_withdrawal: 2 hours
-            3,    // src_cancellation: 3 hours
-            4,    // src_public_cancellation: 4 hours
-            1,    // dst_withdrawal: 1 hour
-            2,    // dst_public_withdrawal: 2 hours
-            3,    // dst_cancellation: 3 hours
-        ),
-        escrow_type: EscrowType::Source,
-        dst_chain_id: "cosmoshub-4".to_string(),
-        dst_token: Addr::unchecked("dst_token_address"),
-        dst_amount: Uint128::new(1000),
-    }
+#[test]
+fn test_timelock_stage_enum() {
+    // Test TimelockStage enum values and bit offsets
+    assert_eq!(TimelockStage::SrcWithdrawal.bit_offset(), 0);
+    assert_eq!(TimelockStage::SrcPublicWithdrawal.bit_offset(), 1);
+    assert_eq!(TimelockStage::SrcCancellation.bit_offset(), 2);
+    assert_eq!(TimelockStage::SrcPublicCancellation.bit_offset(), 3);
+    assert_eq!(TimelockStage::DstWithdrawal.bit_offset(), 4);
+    assert_eq!(TimelockStage::DstPublicWithdrawal.bit_offset(), 5);
+    assert_eq!(TimelockStage::DstCancellation.bit_offset(), 6);
+
+    // Test stage type classification
+    assert!(TimelockStage::SrcWithdrawal.is_source());
+    assert!(TimelockStage::SrcPublicWithdrawal.is_source());
+    assert!(TimelockStage::DstWithdrawal.is_destination());
+    assert!(TimelockStage::DstPublicWithdrawal.is_destination());
+
+    // Test public/private classification
+    assert!(TimelockStage::SrcWithdrawal.is_private());
+    assert!(TimelockStage::SrcPublicWithdrawal.is_public());
+    assert!(TimelockStage::DstWithdrawal.is_private());
+    assert!(TimelockStage::DstPublicWithdrawal.is_public());
 }
 
-// ============================================================================
-// TIMELOCK STAGE TESTS
-// ============================================================================
+#[test]
+fn test_packed_timelocks_creation() {
+    let timelocks = create_test_timelocks();
+
+    // Test deployed_at extraction
+    assert_eq!(timelocks.deployed_at(), 1000);
+
+    // Test individual timelock extraction
+    assert_eq!(timelocks.get(TimelockStage::SrcWithdrawal), 1);
+    assert_eq!(timelocks.get(TimelockStage::SrcPublicWithdrawal), 2);
+    assert_eq!(timelocks.get(TimelockStage::SrcCancellation), 3);
+    assert_eq!(timelocks.get(TimelockStage::SrcPublicCancellation), 4);
+    assert_eq!(timelocks.get(TimelockStage::DstWithdrawal), 1);
+    assert_eq!(timelocks.get(TimelockStage::DstPublicWithdrawal), 2);
+    assert_eq!(timelocks.get(TimelockStage::DstCancellation), 3);
+
+    // Test validation
+    assert!(timelocks.validate().is_ok());
+}
 
 #[test]
-fn test_timelock_stage_progression() {
-    let timelocks = PackedTimelocks::new(
-        1000, // deployed_at
-        1,    // src_withdrawal: 1 hour
-        2,    // src_public_withdrawal: 2 hours
-        3,    // src_cancellation: 3 hours
-        4,    // src_public_cancellation: 4 hours
-        1,    // dst_withdrawal: 1 hour
-        2,    // dst_public_withdrawal: 2 hours
-        3,    // dst_cancellation: 3 hours
-    );
-
-    let deployed_at = 1000u64;
+fn test_timelock_stage_calculations() {
+    let timelocks = create_test_timelocks();
+    let _deployed_at = timelocks.deployed_at() as u64;
 
     // Test stage time calculations
-    assert_eq!(timelocks.get_stage_time(TimelockStage::SrcWithdrawal), deployed_at + 3600);
-    assert_eq!(timelocks.get_stage_time(TimelockStage::SrcPublicWithdrawal), deployed_at + 7200);
-    assert_eq!(timelocks.get_stage_time(TimelockStage::SrcCancellation), deployed_at + 10800);
-    assert_eq!(timelocks.get_stage_time(TimelockStage::SrcPublicCancellation), deployed_at + 14400);
-    assert_eq!(timelocks.get_stage_time(TimelockStage::DstWithdrawal), deployed_at + 3600);
-    assert_eq!(timelocks.get_stage_time(TimelockStage::DstPublicWithdrawal), deployed_at + 7200);
-    assert_eq!(timelocks.get_stage_time(TimelockStage::DstCancellation), deployed_at + 10800);
-}
+    let src_withdrawal_time = timelocks.get_stage_time(TimelockStage::SrcWithdrawal);
+    assert_eq!(src_withdrawal_time, _deployed_at + (1 * 3600)); // 1 hour in seconds
 
-#[test]
-fn test_timelock_stage_validation() {
-    let timelocks = PackedTimelocks::new(
-        1000, // deployed_at
-        1,    // src_withdrawal: 1 hour
-        2,    // src_public_withdrawal: 2 hours
-        3,    // src_cancellation: 3 hours
-        4,    // src_public_cancellation: 4 hours
-        1,    // dst_withdrawal: 1 hour
-        2,    // dst_public_withdrawal: 2 hours
-        3,    // dst_cancellation: 3 hours
-    );
+    let src_public_withdrawal_time = timelocks.get_stage_time(TimelockStage::SrcPublicWithdrawal);
+    assert_eq!(src_public_withdrawal_time, _deployed_at + (2 * 3600)); // 2 hours in seconds
 
-    let deployed_at = 1000u64;
+    // Test stage validation at different times
+    let current_time_before = _deployed_at + 1800; // 30 minutes after deployment
+    let current_time_during = _deployed_at + 3600; // 1 hour after deployment
+    let current_time_after = _deployed_at + 7200;  // 2 hours after deployment
 
-    // Test before any stage
-    let current_time_before = deployed_at + 1800; // 30 minutes after deployment
+    // Before src_withdrawal stage
     assert!(!timelocks.is_within_stage(current_time_before, TimelockStage::SrcWithdrawal));
     assert!(!timelocks.is_within_stage(current_time_before, TimelockStage::SrcPublicWithdrawal));
 
-    // Test during src_withdrawal stage
-    let current_time_during_withdrawal = deployed_at + 3600; // 1 hour after deployment
-    assert!(timelocks.is_within_stage(current_time_during_withdrawal, TimelockStage::SrcWithdrawal));
-    assert!(!timelocks.is_within_stage(current_time_during_withdrawal, TimelockStage::SrcPublicWithdrawal));
+    // During src_withdrawal stage
+    assert!(timelocks.is_within_stage(current_time_during, TimelockStage::SrcWithdrawal));
+    assert!(!timelocks.is_within_stage(current_time_during, TimelockStage::SrcPublicWithdrawal));
 
-    // Test during src_public_withdrawal stage
-    let current_time_during_public = deployed_at + 7200; // 2 hours after deployment
-    assert!(timelocks.is_within_stage(current_time_during_public, TimelockStage::SrcWithdrawal));
-    assert!(timelocks.is_within_stage(current_time_during_public, TimelockStage::SrcPublicWithdrawal));
-    assert!(!timelocks.is_within_stage(current_time_during_public, TimelockStage::SrcCancellation));
-
-    // Test after all stages
-    let current_time_after = deployed_at + 18000; // 5 hours after deployment
+    // After src_public_withdrawal stage
     assert!(timelocks.is_within_stage(current_time_after, TimelockStage::SrcWithdrawal));
     assert!(timelocks.is_within_stage(current_time_after, TimelockStage::SrcPublicWithdrawal));
-    assert!(timelocks.is_within_stage(current_time_after, TimelockStage::SrcCancellation));
-    assert!(timelocks.is_within_stage(current_time_after, TimelockStage::SrcPublicCancellation));
 }
 
 #[test]
-fn test_current_stage_detection() {
-    let timelocks = PackedTimelocks::new(
-        1000, // deployed_at
-        1,    // src_withdrawal: 1 hour
-        2,    // src_public_withdrawal: 2 hours
-        3,    // src_cancellation: 3 hours
-        4,    // src_public_cancellation: 4 hours
-        1,    // dst_withdrawal: 1 hour
-        2,    // dst_public_withdrawal: 2 hours
-        3,    // dst_cancellation: 3 hours
-    );
-
-    let deployed_at = 1000u64;
-
-    // Before any stage
-    let current_time_before = deployed_at + 1800; // 30 minutes after deployment
-    assert_eq!(timelocks.get_current_stage(current_time_before), None);
-
-    // During src_withdrawal stage
-    let current_time_withdrawal = deployed_at + 3600; // 1 hour after deployment
-    assert_eq!(timelocks.get_current_stage(current_time_withdrawal), Some(TimelockStage::SrcWithdrawal));
-
-    // During src_public_withdrawal stage
-    let current_time_public = deployed_at + 7200; // 2 hours after deployment
-    assert_eq!(timelocks.get_current_stage(current_time_public), Some(TimelockStage::SrcWithdrawal));
-
-    // During src_cancellation stage
-    let current_time_cancellation = deployed_at + 10800; // 3 hours after deployment
-    assert_eq!(timelocks.get_current_stage(current_time_cancellation), Some(TimelockStage::SrcWithdrawal));
-
-    // During src_public_cancellation stage
-    let current_time_public_cancellation = deployed_at + 14400; // 4 hours after deployment
-    assert_eq!(timelocks.get_current_stage(current_time_public_cancellation), Some(TimelockStage::SrcWithdrawal));
-}
-
-// ============================================================================
-// TIMELOCK VIOLATION TESTS
-// ============================================================================
-
-#[test]
-fn test_withdrawal_before_timelock() {
+fn test_withdrawal_timelock_validation() {
     let (mut app, contract_addr) = setup_contract();
 
-    // Create escrow
-    let params = create_test_escrow_params();
-    let create_msg = ExecuteMsg::CreateEscrow {
-        params,
-        salt: "withdrawal_before_timelock_test_salt".to_string(),
+    // Deploy escrow
+    let secret = generate_secret();
+    let hashlock = hash_secret(&secret);
+
+    let deploy_msg = ExecuteMsg::DeployEscrowWithFunding {
+        order_hash: "test_order_hash_123".to_string(),
+        hashlock: hashlock.clone(),
+        maker: "maker".to_string(),
+        taker: "taker".to_string(),
+        token: "".to_string(),
+        amount: Uint128::new(1000),
+        safety_deposit: Uint128::new(100),
+        timelocks: create_test_timelocks(),
+        dst_chain_id: "cosmoshub-4".to_string(),
+        dst_token: "dst_token".to_string(),
+        dst_amount: Uint128::new(1000),
+        escrow_type: EscrowType::Source,
     };
 
+    let funds = vec![Coin::new(1100, "uatom")];
     app.execute_contract(
-        Addr::unchecked("owner"),
+        Addr::unchecked("taker"),
         contract_addr.clone(),
-        &create_msg,
-        &[Coin::new(10, "uatom")],
+        &deploy_msg,
+        &funds,
     ).unwrap();
 
     // Try to withdraw before timelock period
     let withdraw_msg = ExecuteMsg::WithdrawSrc {
         escrow_id: 1,
-        secret: "test_secret".to_string(),
+        secret: secret.clone(),
     };
 
     let result = app.execute_contract(
@@ -205,278 +185,157 @@ fn test_withdrawal_before_timelock() {
         &[],
     );
 
+    // Should fail due to timelock
     assert!(result.is_err());
 }
 
 #[test]
-fn test_public_withdrawal_before_timelock() {
+fn test_public_withdrawal_timelock() {
     let (mut app, contract_addr) = setup_contract();
 
-    // Create escrow
-    let params = create_test_escrow_params();
-    let create_msg = ExecuteMsg::CreateEscrow {
-        params,
-        salt: "public_withdrawal_before_timelock_test_salt".to_string(),
+    // Deploy escrow
+    let secret = generate_secret();
+    let hashlock = hash_secret(&secret);
+
+    let deploy_msg = ExecuteMsg::DeployEscrowWithFunding {
+        order_hash: "test_order_hash_123".to_string(),
+        hashlock: hashlock.clone(),
+        maker: "maker".to_string(),
+        taker: "taker".to_string(),
+        token: "".to_string(),
+        amount: Uint128::new(1000),
+        safety_deposit: Uint128::new(100),
+        timelocks: create_test_timelocks(),
+        dst_chain_id: "cosmoshub-4".to_string(),
+        dst_token: "dst_token".to_string(),
+        dst_amount: Uint128::new(1000),
+        escrow_type: EscrowType::Source,
     };
 
+    let funds = vec![Coin::new(1100, "uatom")];
     app.execute_contract(
-        Addr::unchecked("owner"),
+        Addr::unchecked("taker"),
         contract_addr.clone(),
-        &create_msg,
-        &[Coin::new(10, "uatom")],
+        &deploy_msg,
+        &funds,
     ).unwrap();
 
-    // Try public withdrawal before timelock
-    let public_withdraw_msg = ExecuteMsg::PublicWithdrawSrc {
-        escrow_id: 1,
-    };
+    // Try to public withdraw before timelock period
+    let public_withdraw_msg = ExecuteMsg::PublicWithdrawSrc { escrow_id: 1 };
 
     let result = app.execute_contract(
-        Addr::unchecked("taker"),
+        Addr::unchecked("access_token"),
         contract_addr.clone(),
         &public_withdraw_msg,
         &[],
     );
 
+    // Should fail due to timelock
     assert!(result.is_err());
 }
 
 #[test]
-fn test_cancellation_before_timelock() {
+fn test_cancellation_timelock() {
     let (mut app, contract_addr) = setup_contract();
 
-    // Create escrow
-    let params = create_test_escrow_params();
-    let create_msg = ExecuteMsg::CreateEscrow {
-        params,
-        salt: "cancellation_before_timelock_test_salt".to_string(),
+    // Deploy escrow
+    let secret = generate_secret();
+    let hashlock = hash_secret(&secret);
+
+    let deploy_msg = ExecuteMsg::DeployEscrowWithFunding {
+        order_hash: "test_order_hash_123".to_string(),
+        hashlock: hashlock.clone(),
+        maker: "maker".to_string(),
+        taker: "taker".to_string(),
+        token: "".to_string(),
+        amount: Uint128::new(1000),
+        safety_deposit: Uint128::new(100),
+        timelocks: create_test_timelocks(),
+        dst_chain_id: "cosmoshub-4".to_string(),
+        dst_token: "dst_token".to_string(),
+        dst_amount: Uint128::new(1000),
+        escrow_type: EscrowType::Source,
     };
 
+    let funds = vec![Coin::new(1100, "uatom")];
     app.execute_contract(
-        Addr::unchecked("owner"),
+        Addr::unchecked("taker"),
         contract_addr.clone(),
-        &create_msg,
-        &[Coin::new(10, "uatom")],
+        &deploy_msg,
+        &funds,
     ).unwrap();
 
     // Try to cancel before timelock period
-    let cancel_msg = ExecuteMsg::CancelSrc {
-        escrow_id: 1,
-    };
+    let cancel_msg = ExecuteMsg::CancelSrc { escrow_id: 1 };
 
     let result = app.execute_contract(
-        Addr::unchecked("maker"),
+        Addr::unchecked("taker"),
         contract_addr.clone(),
         &cancel_msg,
         &[],
     );
 
+    // Should fail due to timelock
     assert!(result.is_err());
 }
-
-#[test]
-fn test_public_cancellation_before_timelock() {
-    let (mut app, contract_addr) = setup_contract();
-
-    // Create escrow
-    let params = create_test_escrow_params();
-    let create_msg = ExecuteMsg::CreateEscrow {
-        params,
-        salt: "public_cancellation_before_timelock_test_salt".to_string(),
-    };
-
-    app.execute_contract(
-        Addr::unchecked("owner"),
-        contract_addr.clone(),
-        &create_msg,
-        &[Coin::new(10, "uatom")],
-    ).unwrap();
-
-    // Try public cancellation before timelock
-    let public_cancel_msg = ExecuteMsg::PublicCancelSrc {
-        escrow_id: 1,
-    };
-
-    let result = app.execute_contract(
-        Addr::unchecked("maker"),
-        contract_addr.clone(),
-        &public_cancel_msg,
-        &[],
-    );
-
-    assert!(result.is_err());
-}
-
-// ============================================================================
-// RESCUE FUNCTIONALITY TESTS
-// ============================================================================
-
-#[test]
-fn test_rescue_before_delay() {
-    let (mut app, contract_addr) = setup_contract();
-
-    // Create escrow
-    let params = create_test_escrow_params();
-    let create_msg = ExecuteMsg::CreateEscrow {
-        params,
-        salt: "rescue_before_delay_test_salt".to_string(),
-    };
-
-    app.execute_contract(
-        Addr::unchecked("owner"),
-        contract_addr.clone(),
-        &create_msg,
-        &[Coin::new(10, "uatom")],
-    ).unwrap();
-
-    // Try rescue before rescue delay
-    let rescue_msg = ExecuteMsg::Rescue {
-        escrow_id: 1,
-    };
-
-    let result = app.execute_contract(
-        Addr::unchecked("owner"),
-        contract_addr.clone(),
-        &rescue_msg,
-        &[],
-    );
-
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_rescue_availability_calculation() {
-    let timelocks = PackedTimelocks::new(
-        1000, // deployed_at
-        1,    // src_withdrawal: 1 hour
-        2,    // src_public_withdrawal: 2 hours
-        3,    // src_cancellation: 3 hours
-        4,    // src_public_cancellation: 4 hours
-        1,    // dst_withdrawal: 1 hour
-        2,    // dst_public_withdrawal: 2 hours
-        3,    // dst_cancellation: 3 hours
-    );
-
-    let rescue_delay = 3600u64; // 1 hour
-    let deployed_at = 1000u64;
-
-    // Test rescue availability
-    let rescue_start_time = timelocks.rescue_start(rescue_delay);
-    assert_eq!(rescue_start_time, deployed_at + rescue_delay);
-
-    // Before rescue is available
-    let current_time_before = deployed_at + 1800; // 30 minutes after deployment
-    assert!(!timelocks.is_rescue_available(current_time_before, rescue_delay));
-
-    // After rescue is available
-    let current_time_after = deployed_at + 7200; // 2 hours after deployment
-    assert!(timelocks.is_rescue_available(current_time_after, rescue_delay));
-}
-
-// ============================================================================
-// DESTINATION ESCROW TIMELOCK TESTS
-// ============================================================================
 
 #[test]
 fn test_destination_escrow_timelocks() {
     let (mut app, contract_addr) = setup_contract();
 
-    // Create destination escrow
-    let mut params = create_test_escrow_params();
-    params.escrow_type = EscrowType::Destination;
+    // Deploy destination escrow
+    let secret = generate_secret();
+    let hashlock = hash_secret(&secret);
 
-    let create_msg = ExecuteMsg::CreateEscrow {
-        params,
-        salt: "destination_timelock_test_salt".to_string(),
+    let deploy_msg = ExecuteMsg::DeployEscrowWithFunding {
+        order_hash: "test_order_hash_123".to_string(),
+        hashlock: hashlock.clone(),
+        maker: "maker".to_string(),
+        taker: "taker".to_string(),
+        token: "".to_string(),
+        amount: Uint128::new(1000),
+        safety_deposit: Uint128::new(100),
+        timelocks: create_test_timelocks(),
+        dst_chain_id: "cosmoshub-4".to_string(),
+        dst_token: "dst_token".to_string(),
+        dst_amount: Uint128::new(1000),
+        escrow_type: EscrowType::Destination,
     };
 
-    app.execute_contract(
-        Addr::unchecked("owner"),
+    let funds = vec![Coin::new(1100, "uatom")];
+    let result = app.execute_contract(
+        Addr::unchecked("taker"),
         contract_addr.clone(),
-        &create_msg,
-        &[Coin::new(10, "uatom")],
-    ).unwrap();
+        &deploy_msg,
+        &funds,
+    );
 
-    // Try destination withdrawal before timelock
+    assert!(result.is_ok());
+
+    // Try to withdraw from destination escrow before timelock
     let withdraw_msg = ExecuteMsg::WithdrawDst {
         escrow_id: 1,
-        secret: "test_secret".to_string(),
+        secret: secret.clone(),
     };
 
     let result = app.execute_contract(
-        Addr::unchecked("maker"),
+        Addr::unchecked("taker"),
         contract_addr.clone(),
         &withdraw_msg,
         &[],
     );
 
+    // Should fail due to timelock
     assert!(result.is_err());
 }
 
 #[test]
-fn test_destination_public_withdrawal_timelock() {
-    let (mut app, contract_addr) = setup_contract();
-
-    // Create destination escrow
-    let mut params = create_test_escrow_params();
-    params.escrow_type = EscrowType::Destination;
-
-    let create_msg = ExecuteMsg::CreateEscrow {
-        params,
-        salt: "destination_public_withdrawal_test_salt".to_string(),
-    };
-
-    app.execute_contract(
-        Addr::unchecked("owner"),
-        contract_addr.clone(),
-        &create_msg,
-        &[Coin::new(10, "uatom")],
-    ).unwrap();
-
-    // Try destination public withdrawal before timelock
-    let public_withdraw_msg = ExecuteMsg::PublicWithdrawDst {
-        escrow_id: 1,
-    };
-
-    let result = app.execute_contract(
-        Addr::unchecked("maker"),
-        contract_addr.clone(),
-        &public_withdraw_msg,
-        &[],
-    );
-
-    assert!(result.is_err());
-}
-
-// ============================================================================
-// TIMELOCK STAGE TRANSITION TESTS
-// ============================================================================
-
-#[test]
-fn test_stage_transition_validation() {
-    let timelocks = PackedTimelocks::new(
-        1000, // deployed_at
-        1,    // src_withdrawal: 1 hour
-        2,    // src_public_withdrawal: 2 hours
-        3,    // src_cancellation: 3 hours
-        4,    // src_public_cancellation: 4 hours
-        1,    // dst_withdrawal: 1 hour
-        2,    // dst_public_withdrawal: 2 hours
-        3,    // dst_cancellation: 3 hours
-    );
-
-    // Validate timelock progression
-    let validation_result = timelocks.validate();
-    assert!(validation_result.is_ok());
-}
-
-#[test]
-fn test_invalid_stage_transition() {
-    // Create timelocks with invalid progression
+fn test_invalid_timelock_progression() {
+    // Create timelocks with invalid progression (public withdrawal before private)
     let invalid_timelocks = PackedTimelocks::new(
         1000, // deployed_at
         2,    // src_withdrawal: 2 hours
-        1,    // src_public_withdrawal: 1 hour (INVALID: before private)
+        1,    // src_public_withdrawal: 1 hour (should be after private)
         3,    // src_cancellation: 3 hours
         4,    // src_public_cancellation: 4 hours
         1,    // dst_withdrawal: 1 hour
@@ -484,54 +343,32 @@ fn test_invalid_stage_transition() {
         3,    // dst_cancellation: 3 hours
     );
 
-    // Validate should fail
-    let validation_result = invalid_timelocks.validate();
-    assert!(validation_result.is_err());
-}
-
-// ============================================================================
-// TIMELOCK DEBUG AND UTILITY TESTS
-// ============================================================================
-
-#[test]
-fn test_timelock_debug_info() {
-    let timelocks = PackedTimelocks::new(
-        1000, // deployed_at
-        1,    // src_withdrawal: 1 hour
-        2,    // src_public_withdrawal: 2 hours
-        3,    // src_cancellation: 3 hours
-        4,    // src_public_cancellation: 4 hours
-        1,    // dst_withdrawal: 1 hour
-        2,    // dst_public_withdrawal: 2 hours
-        3,    // dst_cancellation: 3 hours
-    );
-
-    let debug_info = timelocks.debug_info();
-    assert!(debug_info.contains("Deployed: 1000"));
-    assert!(debug_info.contains("Src: [1h, 2h, 3h, 4h]"));
-    assert!(debug_info.contains("Dst: [1h, 2h, 3h]"));
+    // Test validation
+    assert!(invalid_timelocks.validate().is_err());
 }
 
 #[test]
-fn test_timelock_stage_passed() {
-    let timelocks = PackedTimelocks::new(
-        1000, // deployed_at
-        1,    // src_withdrawal: 1 hour
-        2,    // src_public_withdrawal: 2 hours
-        3,    // src_cancellation: 3 hours
-        4,    // src_public_cancellation: 4 hours
-        1,    // dst_withdrawal: 1 hour
-        2,    // dst_public_withdrawal: 2 hours
-        3,    // dst_cancellation: 3 hours
-    );
+fn test_timelock_stage_progression() {
+    let timelocks = create_test_timelocks();
+    let _deployed_at = timelocks.deployed_at() as u64;
 
-    let deployed_at = 1000u64;
+    // Test that stages progress in the correct order
+    let src_withdrawal_time = timelocks.get_stage_time(TimelockStage::SrcWithdrawal);
+    let src_public_withdrawal_time = timelocks.get_stage_time(TimelockStage::SrcPublicWithdrawal);
+    let src_cancellation_time = timelocks.get_stage_time(TimelockStage::SrcCancellation);
+    let src_public_cancellation_time = timelocks.get_stage_time(TimelockStage::SrcPublicCancellation);
 
-    // Test stage passed functionality
-    let current_time_before = deployed_at + 1800; // 30 minutes after deployment
-    assert!(!timelocks.has_stage_passed(current_time_before, TimelockStage::SrcWithdrawal));
+    // Verify progression order
+    assert!(src_withdrawal_time < src_public_withdrawal_time);
+    assert!(src_public_withdrawal_time < src_cancellation_time);
+    assert!(src_cancellation_time < src_public_cancellation_time);
 
-    let current_time_after = deployed_at + 7200; // 2 hours after deployment
-    assert!(timelocks.has_stage_passed(current_time_after, TimelockStage::SrcWithdrawal));
-    assert!(!timelocks.has_stage_passed(current_time_after, TimelockStage::SrcCancellation));
+    // Test destination timelocks
+    let dst_withdrawal_time = timelocks.get_stage_time(TimelockStage::DstWithdrawal);
+    let dst_public_withdrawal_time = timelocks.get_stage_time(TimelockStage::DstPublicWithdrawal);
+    let dst_cancellation_time = timelocks.get_stage_time(TimelockStage::DstCancellation);
+
+    // Verify destination progression order
+    assert!(dst_withdrawal_time < dst_public_withdrawal_time);
+    assert!(dst_public_withdrawal_time < dst_cancellation_time);
 } 

@@ -1,7 +1,7 @@
 use cosmwasm_std::{Deps, StdResult, Order};
 use cw_storage_plus::Bound;
-use crate::msg::{ConfigResponse, EscrowResponse, EscrowsResponse, EscrowByHashResponse};
-use crate::state::{CONFIG, ESCROWS, ESCROW_BY_HASH};
+use crate::msg::{ConfigResponse, EscrowResponse, EscrowsResponse};
+use crate::state::{CONFIG, ESCROWS};
 
 pub fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
     let config = CONFIG.load(deps.storage)?;
@@ -56,9 +56,4 @@ pub fn query_escrows(
     Ok(EscrowsResponse {
         escrows: escrows?,
     })
-}
-
-pub fn query_escrow_by_hash(deps: Deps, hash: String) -> StdResult<EscrowByHashResponse> {
-    let escrow_id = ESCROW_BY_HASH.may_load(deps.storage, hash)?;
-    Ok(EscrowByHashResponse { escrow_id })
 } 

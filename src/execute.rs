@@ -8,45 +8,98 @@ use sha2::{Sha256, Digest};
 use crate::error::ContractError;
 use crate::msg::InstantiateMsg;
 use crate::state::{
-    Config, CONFIG, ESCROWS, ESCROW_COUNTER, TimelockStage
+    CONFIG, ESCROWS, TimelockStage, EscrowState, EscrowInfo, 
+    Immutables, PackedTimelocks, DstImmutablesComplement, EscrowType, get_next_escrow_id
 };
 
-// Import factory functions
 pub fn execute_instantiate(
     deps: DepsMut,
-    _info: MessageInfo,
+    env: Env,
+    info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
-    let config = Config {
-        owner: deps.api.addr_validate(&msg.owner)?,
-        access_token: deps.api.addr_validate(&msg.access_token)?,
-        rescue_delay: msg.rescue_delay,
-        factory: deps.api.addr_validate(&msg.factory)?,
+    // Validate that the correct amount of funds was sent
+    let total_required = msg.amount + msg.safety_deposit;
+    let sent_amount = info.funds.iter()
+        .find(|coin| coin.denom == "uatom")
+        .map(|coin| coin.amount)
+        .unwrap_or_default();
+
+    if sent_amount != total_required {
+        return Err(ContractError::InsufficientBalance { 
+            required: total_required.to_string(), 
+            available: sent_amount.to_string() 
+        });
+    }
+
+    // Create immutables for escrow
+    let deployed_at = env.block.time.seconds() as u32;
+    let immutables = Immutables {
+        order_hash: msg.order_hash.clone(),
+        hashlock: msg.hashlock.clone(),
+        maker: deps.api.addr_validate(&msg.maker)?,
+        taker: deps.api.addr_validate(&msg.taker)?,
+        token: if msg.token.is_empty() {
+            Addr::unchecked("") // Native token
+        } else {
+            deps.api.addr_validate(&msg.token)?
+        },
+        amount: msg.amount,
+        safety_deposit: msg.safety_deposit,
+        timelocks: PackedTimelocks::new(
+            deployed_at,
+            msg.timelocks.get(TimelockStage::SrcWithdrawal),
+            msg.timelocks.get(TimelockStage::SrcPublicWithdrawal),
+            msg.timelocks.get(TimelockStage::SrcCancellation),
+            msg.timelocks.get(TimelockStage::SrcPublicCancellation),
+            msg.timelocks.get(TimelockStage::DstWithdrawal),
+            msg.timelocks.get(TimelockStage::DstPublicWithdrawal),
+            msg.timelocks.get(TimelockStage::DstCancellation),
+        ),
     };
 
-    // Initialize regular config
-    CONFIG.save(deps.storage, &config)?;
-    ESCROW_COUNTER.save(deps.storage, &0u64)?;
+    // Validate immutables
+    immutables.validate()?;
 
-    // Initialize factory config
-    let factory_config = crate::state::FactoryConfig {
-        owner: deps.api.addr_validate(&msg.owner)?,
-        escrow_contract: deps.api.addr_validate(&msg.factory)?,
-        access_token: deps.api.addr_validate(&msg.access_token)?,
-        rescue_delay: msg.rescue_delay,
-        min_safety_deposit: Uint128::new(100), // Default minimum
-        max_safety_deposit: Uint128::new(10000), // Default maximum
-        creation_fee: Uint128::new(10), // Default creation fee
+    // Get next escrow ID
+    let escrow_id = get_next_escrow_id(deps.storage)?;
+
+    // Create destination complement (only for source escrows)
+    let dst_complement = if msg.escrow_type.is_source() {
+        Some(DstImmutablesComplement {
+            maker: deps.api.addr_validate(&msg.maker)?,
+            amount: msg.dst_amount,
+            token: deps.api.addr_validate(&msg.dst_token)?,
+            safety_deposit: msg.safety_deposit,
+            chain_id: msg.dst_chain_id,
+        })
+    } else {
+        None
     };
 
-    crate::state::FACTORY_CONFIG.save(deps.storage, &factory_config)?;
+    let escrow_info = EscrowInfo {
+        immutables,
+        dst_complement,
+        escrow_type: msg.escrow_type,
+        is_active: true,
+        created_at: env.block.time,
+    };
+
+    let escrow_state = EscrowState {
+        escrow_info,
+        balance: msg.amount,
+        native_balance: msg.safety_deposit,
+    };
+
+    // Save escrow (no hash mapping needed in hybrid approach)
+    ESCROWS.save(deps.storage, escrow_id, &escrow_state)?;
 
     Ok(Response::new()
         .add_attribute("method", "instantiate")
-        .add_attribute("owner", msg.owner)
-        .add_attribute("access_token", msg.access_token)
-        .add_attribute("rescue_delay", msg.rescue_delay.to_string())
-        .add_attribute("factory", msg.factory))
+        .add_attribute("escrow_id", escrow_id.to_string())
+        .add_attribute("escrow_type", format!("{:?}", msg.escrow_type))
+        .add_attribute("amount", msg.amount.to_string())
+        .add_attribute("safety_deposit", msg.safety_deposit.to_string()))
 }
 
 /// Source-specific withdraw function
