@@ -1,5 +1,5 @@
 import { ethers } from 'ethers';
-import { EthereumConfig, EscrowConfig, EscrowResult, WithdrawResult, CancelResult } from './types';
+import { EthereumConfig, WithdrawResult, CancelResult } from './types';
 
 // ABI for Escrow Factory
 const ESCROW_FACTORY_ABI = [
@@ -63,7 +63,10 @@ export class EthereumClient {
     timelock: number
   ): Promise<string> {
     try {
-      const address = await this.factoryContract.addressOfEscrowSrc(
+      if (!this.factoryContract) {
+        throw new Error('Factory contract not initialized');
+      }
+      const address = await this.factoryContract['addressOfEscrowSrc'](
         hashlock,
         maker,
         taker,
@@ -89,7 +92,10 @@ export class EthereumClient {
     timelock: number
   ): Promise<string> {
     try {
-      const tx = await this.factoryContract.createDstEscrow(
+      if (!this.factoryContract) {
+        throw new Error('Factory contract not initialized');
+      }
+      const tx = await this.factoryContract['createDstEscrow'](
         hashlock,
         maker,
         taker,
@@ -107,16 +113,16 @@ export class EthereumClient {
       // Find the EscrowCreated event
       const event = receipt.logs.find((log: any) => {
         try {
-          const parsed = this.factoryContract.interface.parseLog(log);
-          return parsed.name === 'EscrowCreated';
+          const parsed = this.factoryContract?.interface.parseLog(log);
+          return parsed?.name === 'EscrowCreated';
         } catch {
           return false;
         }
       });
 
-      if (event) {
+      if (event && this.factoryContract) {
         const parsed = this.factoryContract.interface.parseLog(event);
-        return parsed.args.escrow;
+        return parsed?.args?.['escrow'] || '';
       }
 
       throw new Error('EscrowCreated event not found in transaction receipt');

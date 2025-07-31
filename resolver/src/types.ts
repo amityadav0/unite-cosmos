@@ -48,6 +48,21 @@ export interface ResolverConfig {
   cosmos: CosmosConfig;
 }
 
+export interface UserConfig {
+  ethereum: {
+    rpcUrl: string;
+    gasPrice?: string;
+    gasLimit?: number;
+  };
+  cosmos: {
+    rpcUrl: string;
+    mnemonic: string;
+    escrowContractAddress: string;
+    prefix: string;
+    denom: string;
+  };
+}
+
 export interface EscrowState {
   escrowId: string;
   sourceChain: ChainType;
@@ -86,6 +101,21 @@ export interface CancelResult {
   success: boolean;
   txHash?: string;
   error?: string;
+}
+
+export interface DepositResult {
+  success: boolean;
+  txHash?: string;
+  amount?: string;
+  error?: string;
+}
+
+export interface EscrowInfo {
+  maker: string;
+  taker: string;
+  amount: string;
+  timelock: number;
+  isActive: boolean;
 }
 
 export interface SecretInfo {

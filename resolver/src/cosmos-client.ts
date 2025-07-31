@@ -1,15 +1,13 @@
 import {
-  CosmWasmClient,
-  SigningCosmWasmClient,
-  MsgExecuteContractEncodeObject
+  SigningCosmWasmClient
 } from '@cosmjs/cosmwasm-stargate';
 import { DirectSecp256k1HdWallet } from '@cosmjs/proto-signing';
 import { CosmosConfig, WithdrawResult, CancelResult } from './types';
 
 export class CosmosClient {
-  private client: SigningCosmWasmClient;
+  private client!: SigningCosmWasmClient;
   private config: CosmosConfig;
-  private wallet: DirectSecp256k1HdWallet;
+  private wallet!: DirectSecp256k1HdWallet;
 
   constructor(config: CosmosConfig) {
     this.config = config;

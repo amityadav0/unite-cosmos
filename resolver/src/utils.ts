@@ -74,14 +74,14 @@ function buildMerkleTree(leaves: string[]): string {
   }
   
   if (leaves.length === 1) {
-    return leaves[0];
+    return leaves[0] || ethers.ZeroHash;
   }
   
   const newLeaves: string[] = [];
   
   for (let i = 0; i < leaves.length; i += 2) {
-    const left = leaves[i];
-    const right = i + 1 < leaves.length ? leaves[i + 1] : left;
+    const left = leaves[i] || '';
+    const right = i + 1 < leaves.length ? (leaves[i + 1] || '') : left;
     
     const combined = ethers.concat([left, right]);
     newLeaves.push(ethers.keccak256(combined));

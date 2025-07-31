@@ -1,6 +1,9 @@
 import { CrossChainResolver } from './resolver';
+import { UserOperations } from './user-operations';
 import { ResolverConfig, EscrowConfig, ChainType } from './types';
 import { generateSecretAndHashlock } from './utils';
+import { ethToOsmoFlow } from './flows/eth-to-osmo';
+import { osmoToEthFlow } from './flows/osmo-to-eth';
 import dotenv from 'dotenv';
 
 // Load environment variables
@@ -173,6 +176,12 @@ async function cli() {
   const command = args[0];
 
   switch (command) {
+    case 'eth-to-osmo':
+      await ethToOsmoFlow();
+      break;
+    case 'osmo-to-eth':
+      await osmoToEthFlow();
+      break;
     case 'example':
       await exampleUsage();
       break;
@@ -184,25 +193,49 @@ async function cli() {
 Usage: npm start <command>
 
 Commands:
+  eth-to-osmo    Run ETH -> OSMO cross-chain escrow flow (testnet)
+  osmo-to-eth    Run OSMO -> ETH cross-chain escrow flow (testnet)
   example        Run Ethereum -> Cosmos example
   cosmos-to-eth  Run Cosmos -> Ethereum example
   help           Show this help message
 
-Environment Variables:
-  ETHEREUM_RPC_URL                    Ethereum RPC URL
-  ETHEREUM_CHAIN_ID                   Ethereum Chain ID
-  ETHEREUM_PRIVATE_KEY                Ethereum Private Key
-  ETHEREUM_ESCROW_FACTORY_ADDRESS     Ethereum Escrow Factory Address
-  ETHEREUM_ESCROW_SRC_ADDRESS         Ethereum Escrow Source Address
-  ETHEREUM_ESCROW_DST_ADDRESS         Ethereum Escrow Destination Address
-  ETHEREUM_GAS_PRICE                  Ethereum Gas Price (in gwei)
-  ETHEREUM_GAS_LIMIT                  Ethereum Gas Limit
-  COSMOS_RPC_URL                      Cosmos RPC URL
-  COSMOS_CHAIN_ID                     Cosmos Chain ID
-  COSMOS_MNEMONIC                     Cosmos Mnemonic
-  COSMOS_ESCROW_CONTRACT_ADDRESS      Cosmos Escrow Contract Address
-  COSMOS_PREFIX                       Cosmos Address Prefix
-  COSMOS_DENOM                        Cosmos Denomination
+Testnet Environment Variables:
+  ETHEREUM_TESTNET_RPC_URL                    Ethereum Sepolia RPC URL
+  ETHEREUM_TESTNET_CHAIN_ID                   Ethereum Sepolia Chain ID (11155111)
+  ETHEREUM_TESTNET_PRIVATE_KEY                Ethereum Private Key
+  ETHEREUM_TESTNET_ESCROW_FACTORY_ADDRESS     Ethereum Escrow Factory Address
+  ETHEREUM_TESTNET_ESCROW_SRC_ADDRESS         Ethereum Escrow Source Address
+  ETHEREUM_TESTNET_ESCROW_DST_ADDRESS         Ethereum Escrow Destination Address
+  ETHEREUM_TESTNET_GAS_PRICE                  Ethereum Gas Price (in gwei)
+  ETHEREUM_TESTNET_GAS_LIMIT                  Ethereum Gas Limit
+  ETHEREUM_TESTNET_USER_PRIVATE_KEY           User's Ethereum Private Key
+  ETHEREUM_TESTNET_MAKER_ADDRESS              Maker's Ethereum Address
+  ETHEREUM_TESTNET_TAKER_ADDRESS              Taker's Ethereum Address
+  
+  OSMOSIS_TESTNET_RPC_URL                     Osmosis Testnet RPC URL
+  OSMOSIS_TESTNET_CHAIN_ID                    Osmosis Testnet Chain ID (osmo-test-5)
+  OSMOSIS_TESTNET_MNEMONIC                    Osmosis Mnemonic
+  OSMOSIS_TESTNET_ESCROW_CONTRACT_ADDRESS     Osmosis Escrow Contract Address
+  OSMOSIS_TESTNET_PREFIX                      Osmosis Address Prefix (osmo)
+  OSMOSIS_TESTNET_DENOM                       Osmosis Denomination (uosmo)
+  OSMOSIS_TESTNET_MAKER_ADDRESS               Maker's Osmosis Address
+  OSMOSIS_TESTNET_TAKER_ADDRESS               Taker's Osmosis Address
+
+Mainnet Environment Variables:
+  ETHEREUM_RPC_URL                            Ethereum RPC URL
+  ETHEREUM_CHAIN_ID                           Ethereum Chain ID
+  ETHEREUM_PRIVATE_KEY                        Ethereum Private Key
+  ETHEREUM_ESCROW_FACTORY_ADDRESS             Ethereum Escrow Factory Address
+  ETHEREUM_ESCROW_SRC_ADDRESS                 Ethereum Escrow Source Address
+  ETHEREUM_ESCROW_DST_ADDRESS                 Ethereum Escrow Destination Address
+  ETHEREUM_GAS_PRICE                          Ethereum Gas Price (in gwei)
+  ETHEREUM_GAS_LIMIT                          Ethereum Gas Limit
+  COSMOS_RPC_URL                              Cosmos RPC URL
+  COSMOS_CHAIN_ID                             Cosmos Chain ID
+  COSMOS_MNEMONIC                             Cosmos Mnemonic
+  COSMOS_ESCROW_CONTRACT_ADDRESS              Cosmos Escrow Contract Address
+  COSMOS_PREFIX                               Cosmos Address Prefix
+  COSMOS_DENOM                                Cosmos Denomination
       `);
       break;
     default:
