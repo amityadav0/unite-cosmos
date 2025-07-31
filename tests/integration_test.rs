@@ -1,6 +1,6 @@
 use cosmwasm_std::{Addr, Coin, Uint128};
 use cw_multi_test::{App, Contract, ContractWrapper, Executor};
-use escrow_contract::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
+use escrow_contract::msg::{InstantiateMsg, QueryMsg};
 use escrow_contract::state::{TimelockStage, PackedTimelocks, EscrowType};
 use sha2::{Sha256, Digest};
 
@@ -55,16 +55,16 @@ fn test_instantiate() {
         .unwrap();
 
     // Query escrow to verify instantiation
-    let escrow_response: escrow_contract::msg::EscrowResponse = app
+    let config_response: escrow_contract::msg::ConfigResponse = app
         .wrap()
-        .query_wasm_smart(contract_addr, &QueryMsg::Escrow { escrow_id: 1 })
+        .query_wasm_smart(contract_addr, &QueryMsg::Config {})
         .unwrap();
 
-    assert_eq!(escrow_response.escrow_id, 1);
-    assert_eq!(escrow_response.escrow_type, EscrowType::Source);
-    assert!(escrow_response.is_active);
-    assert_eq!(escrow_response.balance, Uint128::new(1000));
-    assert_eq!(escrow_response.native_balance, Uint128::new(100));
+    assert_eq!(config_response.escrow_id, 1);
+    assert_eq!(config_response.escrow_type, EscrowType::Source);
+    assert!(config_response.is_active);
+    assert_eq!(config_response.balance, Uint128::new(1000));
+    assert_eq!(config_response.native_balance, Uint128::new(100));
 }
 
 #[test]
@@ -304,15 +304,14 @@ fn test_direct_escrow_deployment() {
     assert!(result.is_ok());
 
     // Query escrows to verify deployment
-    let escrows: escrow_contract::msg::EscrowsResponse = app
+    let config_response: escrow_contract::msg::ConfigResponse = app
         .wrap()
-        .query_wasm_smart(result.unwrap(), &QueryMsg::Escrows { start_after: None, limit: Some(10) })
+        .query_wasm_smart(result.unwrap(), &QueryMsg::Config {})
         .unwrap();
 
-    assert_eq!(escrows.escrows.len(), 1);
-    let escrow = &escrows.escrows[0];
-    assert_eq!(escrow.escrow_type, EscrowType::Source);
-    assert!(escrow.is_active);
-    assert_eq!(escrow.balance, Uint128::new(1000));
-    assert_eq!(escrow.native_balance, Uint128::new(100));
+    assert_eq!(config_response.escrow_id, 1);
+    assert_eq!(config_response.escrow_type, EscrowType::Source);
+    assert!(config_response.is_active);
+    assert_eq!(config_response.balance, Uint128::new(1000));
+    assert_eq!(config_response.native_balance, Uint128::new(100));
 } 

@@ -11,7 +11,7 @@ use crate::execute::{
     execute_public_withdraw_src, execute_public_withdraw_dst, execute_public_cancel_src,
     execute_rescue
 };
-use crate::query::{query_config, query_escrow, query_escrows};
+use crate::query::{query_config};
 
 pub mod contract;
 pub mod error;
@@ -62,7 +62,5 @@ pub fn execute(
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::Config {} => to_json_binary(&query_config(deps)?),
-        QueryMsg::Escrow { escrow_id } => to_json_binary(&query_escrow(deps, escrow_id)?),
-        QueryMsg::Escrows { start_after, limit } => to_json_binary(&query_escrows(deps, start_after, limit)?),
     }
 } 

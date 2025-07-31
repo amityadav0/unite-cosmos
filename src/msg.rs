@@ -54,17 +54,18 @@ pub enum ExecuteMsg {
 pub enum QueryMsg {
     #[returns(ConfigResponse)]
     Config {},
-    #[returns(EscrowResponse)]
-    Escrow { escrow_id: u64 },
-    #[returns(EscrowsResponse)]
-    Escrows { start_after: Option<u64>, limit: Option<u32> },
 }
 
 #[cw_serde]
 pub struct ConfigResponse {
-    pub owner: String,
-    pub access_token: String,
-    pub rescue_delay: u64,
+    pub escrow_id: u64,
+    pub immutables: crate::state::Immutables,
+    pub dst_complement: Option<crate::state::DstImmutablesComplement>,
+    pub escrow_type: crate::state::EscrowType,
+    pub is_active: bool,
+    pub balance: Uint128,
+    pub native_balance: Uint128,
+    pub created_at: String,
 }
 
 #[cw_serde]

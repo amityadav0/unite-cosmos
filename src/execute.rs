@@ -9,7 +9,7 @@ use crate::error::ContractError;
 use crate::msg::InstantiateMsg;
 use crate::state::{
     CONFIG, ESCROWS, TimelockStage, EscrowState, EscrowInfo, 
-    Immutables, PackedTimelocks, DstImmutablesComplement, EscrowType, get_next_escrow_id
+    Immutables, PackedTimelocks, DstImmutablesComplement, get_next_escrow_id
 };
 
 pub fn execute_instantiate(
