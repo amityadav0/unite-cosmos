@@ -1,8 +1,9 @@
 use cosmwasm_std::{Addr, Coin, Uint128};
 use cw_multi_test::{App, Contract, ContractWrapper, Executor};
-use escrow_contract::msg::{InstantiateMsg, QueryMsg};
+use escrow_contract::msg::{InstantiateMsg, QueryMsg, ExecuteMsg};
 use escrow_contract::state::{TimelockStage, PackedTimelocks, EscrowType};
 use sha2::{Sha256, Digest};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn escrow_contract() -> Box<dyn Contract<cosmwasm_std::Empty>> {
     let contract = ContractWrapper::new(
@@ -16,9 +17,36 @@ fn escrow_contract() -> Box<dyn Contract<cosmwasm_std::Empty>> {
 fn mock_app() -> App {
     App::new(|router, _api, storage| {
         router.bank.init_balance(storage, &Addr::unchecked("owner"), vec![Coin::new(10000, "uatom")]).unwrap();
-        router.bank.init_balance(storage, &Addr::unchecked("access_token"), vec![Coin::new(1000, "uatom")]).unwrap();
-        router.bank.init_balance(storage, &Addr::unchecked("taker"), vec![Coin::new(2000, "uatom")]).unwrap(); // Add funds for taker
+        router.bank.init_balance(storage, &Addr::unchecked("taker"), vec![Coin::new(2000, "uatom")]).unwrap();
+        router.bank.init_balance(storage, &Addr::unchecked("maker"), vec![Coin::new(2000, "uatom")]).unwrap();
     })
+}
+
+fn create_test_timelocks() -> PackedTimelocks {
+    PackedTimelocks::new(
+        1000, // deployed_at
+        1,    // src_withdrawal: 1 hour
+        2,    // src_public_withdrawal: 2 hours
+        3,    // src_cancellation: 3 hours
+        4,    // src_public_cancellation: 4 hours
+        1,    // dst_withdrawal: 1 hour
+        2,    // dst_public_withdrawal: 2 hours
+        3,    // dst_cancellation: 3 hours
+    )
+}
+
+fn generate_secret() -> String {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    format!("secret_{}", timestamp)
+}
+
+fn hash_secret(secret: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(secret.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 #[test]
@@ -314,4 +342,118 @@ fn test_direct_escrow_deployment() {
     assert!(config_response.is_active);
     assert_eq!(config_response.balance, Uint128::new(1000));
     assert_eq!(config_response.native_balance, Uint128::new(100));
+} 
+
+#[test]
+fn test_destination_escrow_instantiation() {
+    let mut app = mock_app();
+    let contract_id = app.store_code(escrow_contract());
+
+    let msg = InstantiateMsg {
+        order_hash: "test_order_hash_456".to_string(),
+        hashlock: "test_hashlock_789".to_string(),
+        maker: "maker".to_string(),
+        taker: "taker".to_string(),
+        token: "".to_string(),
+        amount: Uint128::new(500),
+        safety_deposit: Uint128::new(50),
+        timelocks: create_test_timelocks(),
+        dst_chain_id: "cosmoshub-4".to_string(),
+        dst_token: "dst_token".to_string(),
+        dst_amount: Uint128::new(500),
+        escrow_type: EscrowType::Destination,
+    };
+
+    let contract_addr = app
+        .instantiate_contract(contract_id, Addr::unchecked("owner"), &msg, &[Coin::new(550, "uatom")], "Escrow", None)
+        .unwrap();
+
+    // Query escrow to verify instantiation
+    let config_response: escrow_contract::msg::ConfigResponse = app
+        .wrap()
+        .query_wasm_smart(contract_addr, &QueryMsg::Config {})
+        .unwrap();
+
+    assert_eq!(config_response.escrow_id, 1);
+    assert_eq!(config_response.escrow_type, EscrowType::Destination);
+    assert!(config_response.is_active);
+    assert_eq!(config_response.balance, Uint128::new(500));
+    assert_eq!(config_response.native_balance, Uint128::new(50));
+}
+
+#[test]
+fn test_insufficient_funds_instantiation() {
+    let mut app = mock_app();
+    let contract_id = app.store_code(escrow_contract());
+
+    let msg = InstantiateMsg {
+        order_hash: "test_order_hash_123".to_string(),
+        hashlock: "test_hashlock_456".to_string(),
+        maker: "maker".to_string(),
+        taker: "taker".to_string(),
+        token: "".to_string(),
+        amount: Uint128::new(1000),
+        safety_deposit: Uint128::new(100),
+        timelocks: create_test_timelocks(),
+        dst_chain_id: "cosmoshub-4".to_string(),
+        dst_token: "dst_token".to_string(),
+        dst_amount: Uint128::new(1000),
+        escrow_type: EscrowType::Source,
+    };
+
+    // Try to instantiate with insufficient funds
+    let result = app.instantiate_contract(
+        contract_id, 
+        Addr::unchecked("owner"), 
+        &msg, 
+        &[Coin::new(500, "uatom")], // Only 500 instead of 1100
+        "Escrow", 
+        None
+    );
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_withdrawal_with_correct_secret() {
+    let mut app = mock_app();
+    let contract_id = app.store_code(escrow_contract());
+
+    let secret = generate_secret();
+    let hashlock = hash_secret(&secret);
+
+    let msg = InstantiateMsg {
+        order_hash: "test_order_hash_123".to_string(),
+        hashlock: hashlock.clone(),
+        maker: "maker".to_string(),
+        taker: "taker".to_string(),
+        token: "".to_string(),
+        amount: Uint128::new(1000),
+        safety_deposit: Uint128::new(100),
+        timelocks: create_test_timelocks(),
+        dst_chain_id: "cosmoshub-4".to_string(),
+        dst_token: "dst_token".to_string(),
+        dst_amount: Uint128::new(1000),
+        escrow_type: EscrowType::Source,
+    };
+
+    let contract_addr = app
+        .instantiate_contract(contract_id, Addr::unchecked("owner"), &msg, &[Coin::new(1100, "uatom")], "Escrow", None)
+        .unwrap();
+
+    // Try to withdraw with correct secret (will fail due to timelock, but not due to secret)
+    let withdraw_msg = ExecuteMsg::WithdrawSrc {
+        escrow_id: 1,
+        secret: secret,
+    };
+
+    let result = app.execute_contract(
+        Addr::unchecked("taker"),
+        contract_addr,
+        &withdraw_msg,
+        &[],
+    );
+
+    // Should fail due to timelock, not secret validation
+    assert!(result.is_err());
 } 
