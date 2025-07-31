@@ -91,7 +91,7 @@ pub fn execute_instantiate(
         native_balance: msg.safety_deposit,
     };
 
-    // Save escrow (no hash mapping needed in hybrid approach)
+    // Save escrow
     ESCROWS.save(deps.storage, escrow_id, &escrow_state)?;
 
     Ok(Response::new()
